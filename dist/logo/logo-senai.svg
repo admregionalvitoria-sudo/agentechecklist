@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120" width="400" height="120">
+  <rect width="400" height="120" rx="16" fill="#FFFFFF"/>
+  <rect x="15" y="25" width="370" height="70" rx="12" fill="#164194"/>
+  <rect x="30" y="80" width="340" height="5" rx="2.5" fill="#E84910"/>
+  <text x="200" y="68" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="44" fill="#FFFFFF" text-anchor="middle" letter-spacing="8">SENAI</text>
+</svg>

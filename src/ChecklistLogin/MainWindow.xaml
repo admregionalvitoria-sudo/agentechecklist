@@ -1,0 +1,155 @@
+<Window x:Class="ChecklistLogin.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:ChecklistLogin.ViewModels"
+        mc:Ignorable="d"
+        Title="Checklist de Equipamentos — Início de Uso"
+        Height="780" Width="680"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        Topmost="True"
+        ShowInTaskbar="True"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BgDarkBrush}"
+        PreviewKeyDown="Window_PreviewKeyDown">
+
+    <Window.DataContext>
+        <vm:MainViewModel />
+    </Window.DataContext>
+
+    <Border BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1" CornerRadius="12" Margin="10">
+        <Grid Margin="24">
+            <Grid.RowDefinitions>
+                <!-- Header -->
+                <RowDefinition Height="Auto"/>
+                <!-- User / Machine Badges -->
+                <RowDefinition Height="Auto"/>
+                <!-- Items List -->
+                <RowDefinition Height="*"/>
+                <!-- Footer / Submit Button -->
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- HEADER -->
+            <StackPanel Grid.Row="0" Margin="0,0,0,16">
+                <TextBlock Text="CHECKLIST DE EQUIPAMENTOS" 
+                           FontSize="22" 
+                           FontWeight="Black" 
+                           Foreground="{StaticResource TextPrimaryBrush}" 
+                           HorizontalAlignment="Center"/>
+                <TextBlock Text="Verificação obrigatória física de hardware e conectividade antes do uso" 
+                           FontSize="13" 
+                           Foreground="{StaticResource TextSecondaryBrush}" 
+                           HorizontalAlignment="Center" 
+                           Margin="0,4,0,0"/>
+            </StackPanel>
+
+            <!-- USER & MACHINE BADGES -->
+            <Border Grid.Row="1" Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="14,10" Margin="0,0,0,16">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <TextBlock Text="👤 Usuário: " FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Text="{Binding UserName}" FontWeight="Bold" Foreground="{StaticResource AccentBlueBrush}"/>
+                    </StackPanel>
+
+                    <Separator Grid.Column="1" Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="16,0" Background="{StaticResource CardBorderBrush}"/>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <TextBlock Text="💻 Computador: " FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
+                        <TextBlock Text="{Binding MachineName}" FontWeight="Bold" Foreground="{StaticResource AccentBlueBrush}"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- CHECKLIST ITEMS LIST -->
+            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Margin="0,0,0,16">
+                <ItemsControl ItemsSource="{Binding ChecklistItems}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{StaticResource CardBgBrush}" 
+                                    BorderBrush="{StaticResource CardBorderBrush}" 
+                                    BorderThickness="1" 
+                                    CornerRadius="10" 
+                                    Padding="16" 
+                                    Margin="0,0,0,12">
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Item Title -->
+                                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" 
+                                                       FontSize="17" 
+                                                       FontWeight="Bold" 
+                                                       Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock Text=" — Está OK?" 
+                                                       FontSize="14" 
+                                                       Foreground="{StaticResource TextSecondaryBrush}" 
+                                                       VerticalAlignment="Center" 
+                                                       Margin="6,0,0,0"/>
+                                        </StackPanel>
+
+                                        <!-- Sim / Nao Radio Buttons -->
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <RadioButton Content="Sim" 
+                                                         IsChecked="{Binding IsOkTrue, Mode=TwoWay}" 
+                                                         Style="{StaticResource OptionRadioButtonStyle}"/>
+                                            <RadioButton Content="Não" 
+                                                         IsChecked="{Binding IsOkFalse, Mode=TwoWay}" 
+                                                         Style="{StaticResource OptionRadioButtonStyle}" 
+                                                         Margin="0"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <!-- Dynamic Problem Description Textarea (shows when IsOk is False) -->
+                                    <StackPanel Visibility="{Binding ShowDescriptionField, Converter={StaticResource BooleanToVisibilityConverter}}" 
+                                                Margin="0,12,0,0">
+                                        <TextBlock Text="Descreva o problema encontrado (obrigatório):" 
+                                                   FontSize="12" 
+                                                   FontWeight="SemiBold" 
+                                                   Foreground="{StaticResource AccentRedBrush}" 
+                                                   Margin="0,0,0,6"/>
+                                        <TextBox Text="{Binding ProblemDescription, UpdateSourceTrigger=PropertyChanged}" 
+                                                 AcceptsReturn="True" 
+                                                 TextWrapping="Wrap" 
+                                                 MinHeight="60" 
+                                                 Padding="10" 
+                                                 Background="{StaticResource InputBgBrush}" 
+                                                 Foreground="{StaticResource TextPrimaryBrush}" 
+                                                 BorderBrush="{StaticResource AccentRedBrush}" 
+                                                 BorderThickness="1.5" 
+                                                 FontSize="13"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- FOOTER / SUBMIT BUTTON -->
+            <StackPanel Grid.Row="3">
+                <Button Content="Concluir Checklist" 
+                        Command="{Binding SubmitCommand}" 
+                        Style="{StaticResource SubmitButtonStyle}" 
+                        Height="48"/>
+                <TextBlock Text="* Preencha todos os itens acima para habilitar o término da verificação." 
+                           FontSize="11" 
+                           Foreground="{StaticResource TextSecondaryBrush}" 
+                           HorizontalAlignment="Center" 
+                           Margin="0,8,0,0"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>
