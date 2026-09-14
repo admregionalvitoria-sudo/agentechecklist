@@ -22,3 +22,6 @@ Thumbs.db
 
 # Repositório independente do painel
 painel-log-acesso/
+
+# Prévia e validação local
+artifacts/

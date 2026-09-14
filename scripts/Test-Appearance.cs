@@ -29,6 +29,13 @@ class AppearanceTests {
             if (AutoUpdater.ValidateDownload(testFile, hash)) throw new Exception("Corrupted download accepted");
             if (AutoUpdater.ValidateDownload(testFile, null) || AutoUpdater.ValidateDownload(testFile, "invalid")) throw new Exception("Invalid hash accepted");
         } finally { File.Delete(testFile); }
+        string slideJson = "[{\"id\":\"a\",\"image\":\"data:image/png;base64,AA==\",\"title\":\"Aviso\",\"seconds\":10}]";
+        if (RemoteAppearance.ValidateSlides(slideJson).Count != 1) throw new Exception("Valid carousel rejected");
+        foreach (var invalidSlides in new[] { slideJson.Replace(":10", ":0"), slideJson.Replace(":10", ":61"), slideJson.Replace("data:image/png;base64,AA==", "file:///C:/private.png") }) {
+            bool rejected = false;
+            try { RemoteAppearance.ValidateSlides(invalidSlides); } catch { rejected = true; }
+            if (!rejected) throw new Exception("Invalid carousel accepted");
+        }
         var newer = typeof(AutoUpdater).GetMethod("IsNewerVersion", BindingFlags.Static | BindingFlags.NonPublic);
         if (!(bool)newer.Invoke(null, new object[] { "2.1.1", "2.0.2" }) || (bool)newer.Invoke(null, new object[] { "2.1.1", "2.1.1" })) throw new Exception("Version comparison failed");
         Console.WriteLine("PASS: SHA-256, tampering, version comparison; valid Unicode config, invalid fields, limits, lookup and missing-cache fallback.");

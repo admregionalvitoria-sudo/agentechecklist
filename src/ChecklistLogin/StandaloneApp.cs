@@ -37,13 +37,29 @@ namespace ChecklistLogin
         private static string CacheFile(string location) { return Path.Combine(CacheFolder, "appearance-" + Regex.Replace(location, "[^A-Za-z0-9]", "_") + ".json"); }
         private static Dictionary<string, string> Parse(string payload)
         {
+            if (payload == null || System.Text.Encoding.UTF8.GetByteCount(payload) > 900000) throw new Exception("Appearance too large");
             var data = new JavaScriptSerializer().Deserialize<Dictionary<string, string>>(payload);
             if (data == null || !data.ContainsKey("title") || string.IsNullOrWhiteSpace(data["title"]) || data["title"].Length > 120) throw new Exception("Invalid title");
             if (!data.ContainsKey("accent") || !Regex.IsMatch(data["accent"], "^#[0-9a-fA-F]{6}$")) throw new Exception("Invalid color");
             if (data.ContainsKey("notice") && data["notice"].Length > 2000) throw new Exception("Invalid notice");
             if (data.ContainsKey("subtitle") && data["subtitle"].Length > 120) throw new Exception("Invalid subtitle");
             if (data.ContainsKey("image") && data["image"].Length > 280000) throw new Exception("Invalid image");
+            if (data.ContainsKey("supportUrl")) {
+                Uri link;
+                if (data["supportUrl"].Length > 500 || (data["supportUrl"] != "" && (!Uri.TryCreate(data["supportUrl"], UriKind.Absolute, out link) || link.Scheme != "https"))) throw new Exception("Invalid support URL");
+            }
+            if (data.ContainsKey("supportTitle") && data["supportTitle"].Length > 70) throw new Exception("Invalid support title");
+            if (data.ContainsKey("qrImage") && data["qrImage"].Length > 100000) throw new Exception("Invalid QR image");
+            if (data.ContainsKey("slides")) ValidateSlides(data["slides"]);
             return data;
+        }
+        public static List<AnnouncementSlide> ValidateSlides(string json) {
+            var slides = new JavaScriptSerializer().Deserialize<List<AnnouncementSlide>>(json);
+            if (slides == null || slides.Count > 6) throw new Exception("Invalid slides");
+            foreach (var slide in slides) {
+                if (slide == null || slide.image == null || slide.image.Length > 280000 || (!slide.image.StartsWith("data:image/jpeg;base64,") && !slide.image.StartsWith("data:image/png;base64,")) || slide.title == null || slide.title.Length > 100 || slide.seconds < 5 || slide.seconds > 60) throw new Exception("Invalid slide");
+            }
+            return slides;
         }
         public static string Get(string key, string fallback) { string value; return Current.TryGetValue(key, out value) ? value : fallback; }
         public static void LoadCache(string location)
@@ -63,9 +79,9 @@ namespace ChecklistLogin
                             request.Timeout = 4000; request.ReadWriteTimeout = 4000;
                             using (var result = request.GetResponse())
                             using (var reader = new StreamReader(result.GetResponseStream())) {
-                                char[] buffer = new char[400001]; int total = 0, count;
+                                char[] buffer = new char[1200001]; int total = 0, count;
                                 while (total < buffer.Length && (count = reader.Read(buffer, total, buffer.Length - total)) > 0) total += count;
-                                if (total > 400000) throw new Exception("Response too large");
+                                if (total > 1200000) throw new Exception("Response too large");
                                 response = new string(buffer, 0, total);
                             }
                             break;
@@ -93,7 +109,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.1.1";
+        public const string CurrentVersion = "2.2.0";
 
         // URL raw do arquivo version.txt no repositório GitHub
         private const string VersionUrl =
@@ -601,7 +617,7 @@ namespace ChecklistLogin
         }
     }
 
-    public class MainWindow : Window
+    public partial class MainWindow : Window
     {
         private bool _isExplicitShutdown = false;
         private List<ChecklistQuestion> _questions = new List<ChecklistQuestion>();
@@ -611,35 +627,17 @@ namespace ChecklistLogin
         private TextBlock _customTitle, _customSubtitle, _customNotice;
         private Image _customImage;
         private Border _customPanel;
-        private void ApplyAppearance()
-        {
-            _customTitle.Text = RemoteAppearance.Get("title", "Checklist de Equipamentos");
-            _customSubtitle.Text = RemoteAppearance.Get("subtitle", "SISTEMA DE VERIFICAÇÃO INSTITUCIONAL");
-            _customSubtitle.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(RemoteAppearance.Get("accent", "#1A4B9F")));
-            _progressBarFill.Background = _customSubtitle.Foreground;
-            _customPanel.BorderBrush = _customSubtitle.Foreground;
-            _customNotice.Text = RemoteAppearance.Get("notice", "");
-            _customImage.Source = null;
-            try {
-                string data = RemoteAppearance.Get("image", "");
-                if (data.StartsWith("data:image/png;base64,") || data.StartsWith("data:image/jpeg;base64,")) {
-                    byte[] bytes = Convert.FromBase64String(data.Substring(data.IndexOf(',') + 1));
-                    using (var stream = new MemoryStream(bytes)) {
-                        var bitmap = new BitmapImage(); bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                        bitmap.DecodePixelWidth = 1200; bitmap.StreamSource = stream; bitmap.EndInit(); bitmap.Freeze(); _customImage.Source = bitmap;
-                    }
-                }
-            } catch { }
-            _customPanel.Visibility = string.IsNullOrEmpty(_customNotice.Text) && _customImage.Source == null ? Visibility.Collapsed : Visibility.Visible;
-        }
+        private void ApplyAppearance() { ApplyModernAppearance(); }
         private AppConfig _config;
 
-        public MainWindow(EventWaitHandle showEventWaitHandle)
+        public MainWindow(EventWaitHandle showEventWaitHandle, bool previewOnly = false, string previewLocation = null)
         {
             _config = AppConfig.Load();
+            if (previewOnly && previewLocation != null) _config.Location = previewLocation;
             RemoteAppearance.LoadCache(_config.Location ?? "PORTO");
             InitUI();
             ApplyAppearance();
+            if (previewOnly) return;
             RemoteAppearance.Refresh(_config.Location ?? "PORTO", ApplyAppearance);
 
             // Escutar eventos de troca de sessão/logon do Windows
@@ -708,329 +706,7 @@ namespace ChecklistLogin
             ValidateForm();
         }
 
-        private void InitUI()
-        {
-            // Window Configuration (Full Screen Glassmorphic Container)
-            Title = "Sistema de Checklist SENAI — Verificação de Equipamentos";
-            WindowState = WindowState.Maximized;
-            WindowStyle = WindowStyle.None;
-            ResizeMode = ResizeMode.NoResize;
-            Topmost = true;
-            ShowInTaskbar = true;
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F8FAFC"));
-
-            // Intercept Alt+F4 and Escape
-            PreviewKeyDown += (s, e) =>
-            {
-                if ((e.Key == Key.System && e.SystemKey == Key.F4) || e.Key == Key.Escape)
-                {
-                    e.Handled = true;
-                }
-            };
-
-            Grid mainGrid = new Grid { Margin = new Thickness(24) };
-            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Header
-            mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Question Cards
-            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Footer
-
-            // 1. HEADER WITH SENAI LOGO & METADATA WIDGETS
-            Border headerBorder = new Border
-            {
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFFFFF")),
-                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E2E8F0")),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(20),
-                Padding = new Thickness(24, 16, 24, 16),
-                Margin = new Thickness(0, 0, 0, 20)
-            };
-
-            Grid headerGrid = new Grid();
-            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            // SENAI Institutional Logo Block (Em Destaque Amplo)
-            Image logoImage = new Image
-            {
-                Height = 72,
-                Margin = new Thickness(0, 0, 24, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-            RenderOptions.SetBitmapScalingMode(logoImage, BitmapScalingMode.HighQuality);
-
-            bool logoLoaded = false;
-            try
-            {
-                // 1. Tentar carregar a partir dos recursos embutidos do assembly
-                var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-                using (var stream = assembly.GetManifestResourceStream("logo.png"))
-                {
-                    if (stream != null)
-                    {
-                        BitmapImage bmp = new BitmapImage();
-                        bmp.BeginInit();
-                        bmp.StreamSource = stream;
-                        bmp.CacheOption = BitmapCacheOption.OnLoad;
-                        bmp.EndInit();
-                        bmp.Freeze();
-                        logoImage.Source = bmp;
-                        logoLoaded = true;
-                    }
-                }
-
-                // 2. Fallback: Tentar carregar diretamente do arquivo em disco (logo/logo.png)
-                if (!logoLoaded)
-                {
-                    string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                    string[] possiblePaths = new string[]
-                    {
-                        System.IO.Path.Combine(baseDir, "logo", "logo.png"),
-                        System.IO.Path.Combine(baseDir, "logo.png"),
-                        @"C:\Program Files\ChecklistLogin\logo\logo.png",
-                        @"c:\Users\Porto\Documents\agente cheklist\logo\logo.png"
-                    };
-
-                    foreach (var p in possiblePaths)
-                    {
-                        if (File.Exists(p))
-                        {
-                            BitmapImage bmp = new BitmapImage();
-                            bmp.BeginInit();
-                            bmp.UriSource = new Uri(p, UriKind.Absolute);
-                            bmp.CacheOption = BitmapCacheOption.OnLoad;
-                            bmp.EndInit();
-                            bmp.Freeze();
-                            logoImage.Source = bmp;
-                            logoLoaded = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            catch { }
-
-            if (logoLoaded)
-            {
-                Grid.SetColumn(logoImage, 0);
-                headerGrid.Children.Add(logoImage);
-            }
-            else
-            {
-                // Fallback visual de texto institucional SENAI
-                Border logoBlock = new Border
-                {
-                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A4B9F")),
-                    CornerRadius = new CornerRadius(12),
-                    Padding = new Thickness(20, 8, 20, 8),
-                    Margin = new Thickness(0, 0, 20, 0)
-                };
-                StackPanel logoStack = new StackPanel();
-                TextBlock logoText = new TextBlock
-                {
-                    Text = "SENAI",
-                    FontSize = 26,
-                    FontWeight = FontWeights.Black,
-                    Foreground = Brushes.White,
-                    HorizontalAlignment = HorizontalAlignment.Center
-                };
-                Border accentBar = new Border
-                {
-                    Height = 3.5,
-                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF5E31")),
-                    CornerRadius = new CornerRadius(2),
-                    Margin = new Thickness(0, 2, 0, 0)
-                };
-                logoStack.Children.Add(logoText);
-                logoStack.Children.Add(accentBar);
-                logoBlock.Child = logoStack;
-                Grid.SetColumn(logoBlock, 0);
-                headerGrid.Children.Add(logoBlock);
-            }
-
-            // Title & Subtitle Stack
-            StackPanel titleStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            TextBlock tagText = new TextBlock
-            {
-                Text = "SISTEMA DE VERIFICAÇÃO INSTITUCIONAL",
-                FontSize = 11,
-                FontWeight = FontWeights.Black,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A4B9F")),
-                Margin = new Thickness(0, 0, 0, 2)
-            };
-            TextBlock mainTitle = new TextBlock
-            {
-                Text = "Checklist de Equipamentos",
-                FontSize = 24,
-                FontWeight = FontWeights.Black,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0F172A"))
-            };
-            _customTitle = mainTitle; _customSubtitle = tagText;
-            mainTitle.TextWrapping = TextWrapping.Wrap; tagText.TextWrapping = TextWrapping.Wrap;
-            titleStack.Children.Add(tagText);
-            titleStack.Children.Add(mainTitle);
-            Grid.SetColumn(titleStack, 1);
-
-            // Metadata Badges (Location, User, Machine & Progress)
-            StackPanel badgesPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            
-            // Location Badge
-            Border locationBadge = CreateBadge("📍 Local", _config.Location ?? "PORTO", "#EF5E31");
-            // User Badge
-            Border userBadge = CreateBadge("👤 Usuário", Environment.UserName, "#1A4B9F");
-            // Machine Badge
-            Border pcBadge = CreateBadge("💻 Computador", Environment.MachineName, "#0091D6");
-
-            // Progress Badge
-            Border progressBadge = new Border
-            {
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A4B9F")),
-                CornerRadius = new CornerRadius(14),
-                Padding = new Thickness(16, 8, 16, 8),
-                Margin = new Thickness(8, 0, 0, 0)
-            };
-            StackPanel progStack = new StackPanel();
-            progStack.Children.Add(new TextBlock { Text = "PROGRESSO", FontSize = 9, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#93C5FD")) });
-            _progressText = new TextBlock { Text = "0 de 0 (0%)", FontSize = 13, FontWeight = FontWeights.Black, Foreground = Brushes.White };
-            progStack.Children.Add(_progressText);
-            progressBadge.Child = progStack;
-
-            badgesPanel.Children.Add(locationBadge);
-            badgesPanel.Children.Add(userBadge);
-            badgesPanel.Children.Add(pcBadge);
-            badgesPanel.Children.Add(progressBadge);
-            Grid.SetColumn(badgesPanel, 2);
-
-            headerGrid.Children.Add(titleStack);
-            headerGrid.Children.Add(badgesPanel);
-
-            // Progress Bar Line at bottom of Header
-            Grid headerFullGrid = new Grid();
-            headerFullGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            headerFullGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-            Grid.SetRow(headerGrid, 0);
-            headerFullGrid.Children.Add(headerGrid);
-
-            Border progressTrack = new Border
-            {
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E2E8F0")),
-                Height = 6,
-                CornerRadius = new CornerRadius(3),
-                Margin = new Thickness(0, 12, 0, 0)
-            };
-            _progressBarFill = new Border
-            {
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A4B9F")),
-                Height = 6,
-                CornerRadius = new CornerRadius(3),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Width = 0
-            };
-            progressTrack.Child = _progressBarFill;
-            Grid.SetRow(progressTrack, 1);
-            headerFullGrid.Children.Add(progressTrack);
-
-            headerBorder.Child = headerFullGrid;
-            Grid.SetRow(headerBorder, 0);
-            mainGrid.Children.Add(headerBorder);
-
-            // 2. CHECKLIST ITEMS GRID (100% Responsive Screen Coverage)
-            ScrollViewer scrollViewer = new ScrollViewer
-            {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Margin = new Thickness(0, 0, 0, 20)
-            };
-
-            WrapPanel cardsPanel = new WrapPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-
-            bool isNotebook = (_config.Location ?? "").ToUpperInvariant().Contains("NOTEBOOK");
-
-            AddQuestion(cardsPanel, "tela", "Tela / Monitor com exibição perfeita?", "DISPLAY & IMAGEM");
-            AddQuestion(cardsPanel, "teclado", "Teclado completo e com todas as teclas funcionando?", "PERIFÉRICOS DE ENTRADA");
-
-            if (isNotebook)
-            {
-                AddQuestion(cardsPanel, "touchpad", "Touch Pad / Mouse com cliques e navegação operacionais?", "PERIFÉRICOS DE ENTRADA");
-                AddQuestion(cardsPanel, "internet", "Conexão com a Internet / Rede SENAI ativa?", "CONECTIVIDADE");
-            }
-            else
-            {
-                AddQuestion(cardsPanel, "mouse", "Mouse óptico com cliques e scroll operacionais?", "PERIFÉRICOS DE ENTRADA");
-                AddQuestion(cardsPanel, "internet", "Conexão com a Internet / Rede SENAI ativa?", "CONECTIVIDADE");
-                AddQuestion(cardsPanel, "computador", "Gabinete / Computador liga sem ruídos ou lentidão?", "HARDWARE PRINCIPAL");
-            }
-
-            var body = new StackPanel();
-            _customNotice = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 16, Margin = new Thickness(12) };
-            _customImage = new Image { MaxHeight = 180, Stretch = Stretch.Uniform, Margin = new Thickness(12) };
-            var announcement = new StackPanel(); announcement.Children.Add(_customNotice); announcement.Children.Add(_customImage);
-            _customPanel = new Border { Background = Brushes.White, CornerRadius = new CornerRadius(12), BorderThickness = new Thickness(0, 4, 0, 0), Margin = new Thickness(8), Child = announcement };
-            body.Children.Add(_customPanel); body.Children.Add(cardsPanel);
-            scrollViewer.Content = body;
-            Grid.SetRow(scrollViewer, 1);
-            mainGrid.Children.Add(scrollViewer);
-
-            // 3. FOOTER & INTERACTIVE HOVER BUTTON
-            Border footerBorder = new Border
-            {
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFFFFF")),
-                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E2E8F0")),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new RadiusHelper().Radius20,
-                Padding = new Thickness(24, 16, 24, 16)
-            };
-
-            Grid footerGrid = new Grid();
-            footerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            footerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            StackPanel infoStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            infoStack.Children.Add(new TextBlock
-            {
-                Text = "Serviço Nacional de Aprendizagem Industrial — ",
-                FontSize = 13,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#64748B")),
-                FontWeight = FontWeights.Medium
-            });
-            infoStack.Children.Add(new TextBlock
-            {
-                Text = "SENAI",
-                FontSize = 13,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A4B9F")),
-                FontWeight = FontWeights.Black
-            });
-
-            _btnSubmit = new Button
-            {
-                Content = "Concluir Checklist",
-                Height = 50,
-                Width = 260,
-                FontSize = 16,
-                FontWeight = FontWeights.Bold,
-                Foreground = Brushes.White,
-                IsEnabled = false,
-                Cursor = Cursors.No
-            };
-            UpdateSubmitButtonStyle();
-
-            _btnSubmit.Click += BtnSubmit_Click;
-
-            Grid.SetColumn(infoStack, 0);
-            Grid.SetColumn(_btnSubmit, 1);
-            footerGrid.Children.Add(infoStack);
-            footerGrid.Children.Add(_btnSubmit);
-
-            footerBorder.Child = footerGrid;
-            Grid.SetRow(footerBorder, 2);
-            mainGrid.Children.Add(footerBorder);
-
-            Content = mainGrid;
-        }
+        private void InitUI() { InitModernUi(); }
 
         private Border CreateBadge(string label, string value, string hexColor)
         {
@@ -1050,124 +726,33 @@ namespace ChecklistLogin
             return b;
         }
 
-        private void AddQuestion(WrapPanel container, string id, string title, string category)
+        private void AddQuestion(Panel container, string id, string title, string category)
         {
-            var q = new ChecklistQuestion
-            {
-                Id = id,
-                Title = title,
-                Category = category
-            };
-
-            // Card Container
-            q.CardBorder = new Border
-            {
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFFFFF")),
-                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E2E8F0")),
-                BorderThickness = new Thickness(1.5),
-                CornerRadius = new CornerRadius(20),
-                Padding = new Thickness(20),
-                Margin = new Thickness(10),
-                Width = 420
-            };
-
-            StackPanel cardStack = new StackPanel();
-
-            // Category Tag
-            TextBlock catText = new TextBlock
-            {
-                Text = category,
-                FontSize = 10,
-                FontWeight = FontWeights.Black,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#164194")),
-                Margin = new Thickness(0, 0, 0, 4)
-            };
-            cardStack.Children.Add(catText);
-
-            // Title
-            TextBlock titleText = new TextBlock
-            {
-                Text = title,
-                FontSize = 16,
-                FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0F172A")),
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 16)
-            };
-            cardStack.Children.Add(titleText);
-
-            // SIM / NÃO Custom Touch Buttons
-            Grid btnGrid = new Grid();
-            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            q.BtnSim = new Button
-            {
-                Content = "✔  SIM",
-                Height = 46,
-                FontSize = 15,
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 6, 0),
-                Cursor = Cursors.Hand
-            };
-            StyleButtonUnselected(q.BtnSim, "#F0F9FF", "#0091D6", "#BAE6FD");
-
-            q.BtnNao = new Button
-            {
-                Content = "✖  NÃO",
-                Height = 46,
-                FontSize = 15,
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(6, 0, 0, 0),
-                Cursor = Cursors.Hand
-            };
-            StyleButtonUnselected(q.BtnNao, "#FFF7ED", "#EF5E31", "#FFEDD5");
-
-            Grid.SetColumn(q.BtnSim, 0);
-            Grid.SetColumn(q.BtnNao, 1);
-            btnGrid.Children.Add(q.BtnSim);
-            btnGrid.Children.Add(q.BtnNao);
-            cardStack.Children.Add(btnGrid);
-
-            // Dynamic Problem Description Textarea
-            q.DescPanel = new StackPanel
-            {
-                Visibility = Visibility.Collapsed,
-                Margin = new Thickness(0, 14, 0, 0)
-            };
-
-            TextBlock label = new TextBlock
-            {
-                Text = "Descreva detalhadamente o problema (Obrigatório):",
-                FontSize = 11,
-                FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF5E31")),
-                Margin = new Thickness(0, 0, 0, 6)
-            };
-
-            q.DescTextBox = new TextBox
-            {
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap,
-                MinHeight = 54,
-                Padding = new Thickness(10),
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFFFFF")),
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0F172A")),
-                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF5E31")),
-                BorderThickness = new Thickness(1.5),
-                FontSize = 13
-            };
-
-            q.DescTextBox.TextChanged += (s, e) =>
-            {
-                q.ProblemDescription = q.DescTextBox.Text;
-                ValidateForm();
-            };
-
-            q.DescPanel.Children.Add(label);
-            q.DescPanel.Children.Add(q.DescTextBox);
-            cardStack.Children.Add(q.DescPanel);
-
+            var q = new ChecklistQuestion { Id = id, Title = title, Category = category };
+            q.CardBorder = Surface(null, new Thickness(14, 10, 14, 10));
+            q.CardBorder.Margin = new Thickness(0, 0, 0, 8); q.CardBorder.MinHeight = 84;
+            var layout = new Grid { VerticalAlignment = VerticalAlignment.Center };
+            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(46) });
+            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(136) });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            string glyph = id == "tela" ? "\uE7F4" : id == "teclado" ? "\uE765" : id == "internet" ? "\uE701" : id == "computador" ? "\uE950" : "\uE962";
+            var icon = new TextBlock { Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 22, Foreground = Brush("#164194"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            layout.Children.Add(new Border { Background = Brush("#F0F5FC"), CornerRadius = new CornerRadius(10), Width = 36, Height = 36, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, Child = icon });
+            var copy = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+            copy.Children.Add(Label((_questions.Count + 1).ToString("00") + " · VERIFICAÇÃO", 8, "#8A98AC", false));
+            copy.Children.Add(Label(title, 15, "#142842", true)); copy.Children.Add(Label(category, 10, "#718096", false)); Grid.SetColumn(copy, 1); layout.Children.Add(copy);
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            q.BtnSim = new Button { Content = "✓ Sim", Width = 62, Height = 34, FontSize = 12, Margin = new Thickness(0, 0, 6, 0), Cursor = Cursors.Hand };
+            q.BtnNao = new Button { Content = "× Não", Width = 62, Height = 34, FontSize = 12, Cursor = Cursors.Hand };
+            StyleButtonUnselected(q.BtnSim, "#F0F9FF", "#0091D6", "#BAE6FD"); StyleButtonUnselected(q.BtnNao, "#FFF7ED", "#EF5E31", "#FFEDD5");
+            buttons.Children.Add(q.BtnSim); buttons.Children.Add(q.BtnNao); Grid.SetColumn(buttons, 2); layout.Children.Add(buttons);
+            q.DescPanel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 8, 0, 0) };
+            q.DescPanel.Children.Add(Label("Descreva o problema para continuar:", 10, "#C45C38", true));
+            q.DescTextBox = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 44, MaxHeight = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(8), FontSize = 12, BorderBrush = Brush("#E7B9A8"), BorderThickness = new Thickness(1), Background = Brushes.White, Foreground = Ink };
+            q.DescTextBox.TextChanged += delegate { q.ProblemDescription = q.DescTextBox.Text; ValidateForm(); };
+            q.DescPanel.Children.Add(q.DescTextBox); Grid.SetRow(q.DescPanel, 1); Grid.SetColumn(q.DescPanel, 1); Grid.SetColumnSpan(q.DescPanel, 2); layout.Children.Add(q.DescPanel);
             // SIM Click Event
             q.BtnSim.Click += (s, e) =>
             {
@@ -1190,9 +775,8 @@ namespace ChecklistLogin
                 ValidateForm();
             };
 
-            q.CardBorder.Child = cardStack;
-            container.Children.Add(q.CardBorder);
-            _questions.Add(q);
+            q.CardBorder.Child = layout;
+            container.Children.Add(q.CardBorder); _questions.Add(q);
         }
 
         private void StyleButtonUnselected(Button btn, string bgHex, string fgHex, string borderHex)
