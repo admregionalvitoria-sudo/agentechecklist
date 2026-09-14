@@ -1,3 +1,4 @@
+﻿param([switch]$ExecutableOnly)
 # PowerShell script to build ChecklistLogin application and create the single unified installer
 $ErrorActionPreference = "Stop"
 
@@ -19,19 +20,14 @@ $FinalInstaller = "$PSScriptRoot\Instalar_Agente_Checklist_SENAI.exe"
 $ReleaseDir = "$PSScriptRoot\release"
 $VersionFile = "$PSScriptRoot\version.txt"
 
-# 1. Limpar instaladores/executáveis legados da raiz
-Write-Host "Limpando arquivos legados da raiz..." -ForegroundColor Yellow
-Remove-Item -Path "$PSScriptRoot\ChecklistLogin.exe" -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$PSScriptRoot\Instalar_Agente_Checklist.exe" -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$PSScriptRoot\Output" -Recurse -Force -ErrorAction SilentlyContinue
-
 if (-not (Test-Path $BinDir)) { New-Item -ItemType Directory -Path $BinDir | Out-Null }
 if (-not (Test-Path $ReleaseDir)) { New-Item -ItemType Directory -Path $ReleaseDir | Out-Null }
 
 # 2. Compilar C# Standalone Application na pasta temporária bin\
 Write-Host "Compilando executável do agente C# WPF..." -ForegroundColor Yellow
 if (Test-Path $CscPath) {
-    & $CscPath /target:winexe /out:"$TargetExe" /nologo "/resource:$PSScriptRoot\logo\logo.png,logo.png" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationCore.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Xaml.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Core.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" "$SourceCs"
+    & $CscPath /target:winexe /out:"$TargetExe" /nologo "/resource:$PSScriptRoot\logo\logo.png,logo.png" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationCore.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Xaml.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Web.Extensions.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Core.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /r:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" "$SourceCs"
+    if ($LASTEXITCODE -ne 0) { throw "Falha na compilacao do agente." }
     Write-Host "Executável base compilado com logo embutida!" -ForegroundColor Green
 } else {
     Write-Error "Compilador Roslyn csc.exe não encontrado em: $CscPath"
@@ -49,18 +45,22 @@ if ($versionMatch) {
 
     # Copia o exe compilado para release/ (baixado pelas máquinas no auto-update)
     Copy-Item -Path $TargetExe -Destination "$ReleaseDir\ChecklistLogin.exe" -Force
+    $releaseHash = (Get-FileHash -LiteralPath "$ReleaseDir\ChecklistLogin.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath "$ReleaseDir\ChecklistLogin.exe.sha256" -Value $releaseHash -Encoding ASCII
+    @{ version = $currentVersion; sha256 = $releaseHash } | ConvertTo-Json | Set-Content -LiteralPath "$ReleaseDir\manifest.json" -Encoding ASCII
     Write-Host "release\ChecklistLogin.exe copiado para auto-update!" -ForegroundColor Green
 } else {
     Write-Warning "Não foi possível detectar CurrentVersion no código-fonte."
 }
+
+if ($ExecutableOnly) { Write-Host "Executavel, versao e hashes preparados."; exit 0 }
 
 # 4. Gerar Instalador Único via Inno Setup
 Write-Host "Gerando instalador único executável via Inno Setup..." -ForegroundColor Yellow
 if (Test-Path $IsccPath) {
     & $IsccPath "$InstallerIss" | Out-Null
     
-    # Limpar a pasta temporária bin\ para que o único .exe na raiz seja o Instalador Final
-    Remove-Item -Path $BinDir -Recurse -Force -ErrorAction SilentlyContinue
+    if ($LASTEXITCODE -ne 0) { throw "Falha ao gerar instalador." }
 
     if (Test-Path $FinalInstaller) {
         Write-Host "=========================================" -ForegroundColor Green

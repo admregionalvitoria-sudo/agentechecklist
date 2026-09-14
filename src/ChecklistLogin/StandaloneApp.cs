@@ -1,10 +1,12 @@
-using System;
+﻿using System;
+using System.Web.Script.Serialization;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Reflection;
 using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -16,6 +18,9 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 
+[assembly: AssemblyVersion(ChecklistLogin.AutoUpdater.CurrentVersion + ".0")]
+[assembly: AssemblyFileVersion(ChecklistLogin.AutoUpdater.CurrentVersion + ".0")]
+
 namespace ChecklistLogin
 {
     // ─────────────────────────────────────────────────────────────────────────
@@ -23,10 +28,72 @@ namespace ChecklistLogin
     // Estratégia: lê version.txt direto do repo GitHub e baixa o .exe raw
     // Para publicar nova versão: basta compilar, copiar para release/ e git push
     // ─────────────────────────────────────────────────────────────────────────
+    public static class RemoteAppearance
+    {
+        private static readonly string CacheFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChecklistLogin");
+        private const string Endpoint = "https://firestore.googleapis.com/v1/projects/gen-lang-client-0375839871/databases/ai-studio-remixlogexplorer-d706c4ad-7968-40a7-a99d-147b9ef38ec8/documents/checklistAppearance/";
+        private static int _refreshing;
+        public static Dictionary<string, string> Current = new Dictionary<string, string>();
+        private static string CacheFile(string location) { return Path.Combine(CacheFolder, "appearance-" + Regex.Replace(location, "[^A-Za-z0-9]", "_") + ".json"); }
+        private static Dictionary<string, string> Parse(string payload)
+        {
+            var data = new JavaScriptSerializer().Deserialize<Dictionary<string, string>>(payload);
+            if (data == null || !data.ContainsKey("title") || string.IsNullOrWhiteSpace(data["title"]) || data["title"].Length > 120) throw new Exception("Invalid title");
+            if (!data.ContainsKey("accent") || !Regex.IsMatch(data["accent"], "^#[0-9a-fA-F]{6}$")) throw new Exception("Invalid color");
+            if (data.ContainsKey("notice") && data["notice"].Length > 2000) throw new Exception("Invalid notice");
+            if (data.ContainsKey("subtitle") && data["subtitle"].Length > 120) throw new Exception("Invalid subtitle");
+            if (data.ContainsKey("image") && data["image"].Length > 280000) throw new Exception("Invalid image");
+            return data;
+        }
+        public static string Get(string key, string fallback) { string value; return Current.TryGetValue(key, out value) ? value : fallback; }
+        public static void LoadCache(string location)
+        {
+            try { Current = Parse(File.ReadAllText(CacheFile(location))); } catch { Current = new Dictionary<string, string>(); }
+        }
+        public static void Refresh(string location, Action done)
+        {
+            if (Interlocked.Exchange(ref _refreshing, 1) != 0) return;
+            ThreadPool.QueueUserWorkItem(delegate {
+                try {
+                    ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
+                    string response = null;
+                    foreach (string scope in new string[] { location, "global" }) {
+                        try {
+                            var request = (HttpWebRequest)WebRequest.Create(Endpoint + Uri.EscapeDataString(scope));
+                            request.Timeout = 4000; request.ReadWriteTimeout = 4000;
+                            using (var result = request.GetResponse())
+                            using (var reader = new StreamReader(result.GetResponseStream())) {
+                                char[] buffer = new char[400001]; int total = 0, count;
+                                while (total < buffer.Length && (count = reader.Read(buffer, total, buffer.Length - total)) > 0) total += count;
+                                if (total > 400000) throw new Exception("Response too large");
+                                response = new string(buffer, 0, total);
+                            }
+                            break;
+                        } catch (WebException ex) {
+                            var result = ex.Response as HttpWebResponse;
+                            if (result == null || result.StatusCode != HttpStatusCode.NotFound) throw;
+                        }
+                    }
+                    if (response == null) return;
+                    var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(response);
+                    var fields = (Dictionary<string, object>)root["fields"];
+                    string payload = (string)((Dictionary<string, object>)fields["payload"])["stringValue"];
+                    var parsed = Parse(payload);
+                    Directory.CreateDirectory(CacheFolder);
+                    File.WriteAllText(CacheFile(location) + ".tmp", payload);
+                    if (File.Exists(CacheFile(location))) File.Replace(CacheFile(location) + ".tmp", CacheFile(location), null);
+                    else File.Move(CacheFile(location) + ".tmp", CacheFile(location));
+                    Application.Current.Dispatcher.Invoke(new Action(delegate { Current = parsed; done(); }));
+                } catch (Exception ex) { Debug.WriteLine("Appearance: " + ex.Message); }
+                finally { Interlocked.Exchange(ref _refreshing, 0); }
+            });
+        }
+    }
+
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.0.2";
+        public const string CurrentVersion = "2.1.1";
 
         // URL raw do arquivo version.txt no repositório GitHub
         private const string VersionUrl =
@@ -60,6 +127,7 @@ namespace ChecklistLogin
         {
             try
             {
+                ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
                 // 1. Lê version.txt direto do repositório GitHub (sem autenticação)
                 string remoteVersion = FetchText(VersionUrl);
                 if (string.IsNullOrWhiteSpace(remoteVersion)) return;
@@ -82,17 +150,33 @@ namespace ChecklistLogin
                     return;
                 }
 
+                string expectedHash = FetchText(ExeUrl + ".sha256");
+                if (!ValidateDownload(tempPath, expectedHash)) {
+                    try { File.Delete(tempPath); } catch { }
+                    return;
+                }
+
                 // 5. Troca atômica: renomeia atual para .old, coloca novo no lugar
                 //    No Windows um EXE em execução não pode ser sobrescrito, mas PODE ser renomeado.
                 string oldPath = exePath + ".old";
                 try { File.Delete(oldPath); } catch { }
 
                 File.Move(exePath, oldPath);   // exe_atual -> exe_atual.old
-                File.Move(tempPath, exePath);  // novo_tmp  -> exe_atual
+                try { File.Move(tempPath, exePath); }
+                catch { if (!File.Exists(exePath)) File.Move(oldPath, exePath); throw; }
 
                 // Atualização aplicada — entrará em vigor no próximo logon/reinício do agente
             }
             catch { /* Falhas são silenciosas — app continua funcionando normalmente */ }
+        }
+
+        public static bool ValidateDownload(string path, string expectedHash)
+        {
+            if (expectedHash == null || !Regex.IsMatch(expectedHash.Trim(), "^[a-fA-F0-9]{64}$")) return false;
+            using (var stream = File.OpenRead(path))
+            using (var sha = SHA256.Create()) {
+                return string.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""), expectedHash.Trim(), StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         // Baixa texto simples de uma URL (para ler version.txt)
@@ -241,6 +325,7 @@ namespace ChecklistLogin
             catch (Exception ex)
             {
                 Debug.WriteLine("SaveConfigFile error: " + ex.Message);
+                throw;
             }
         }
 
@@ -318,7 +403,7 @@ namespace ChecklistLogin
 
                 // 3. Generate XML Task Definition for ALL USERS, USER SWITCHING, and HIGH PRIORITY
                 string taskName = "ChecklistLoginTask";
-                string xmlPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ChecklistTask.xml");
+                string xmlPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ChecklistTask-" + Guid.NewGuid().ToString("N") + ".xml");
 
                 string xmlContent = string.Format(@"<?xml version=""1.0"" encoding=""UTF-16""?>
 <Task version=""1.4"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
@@ -331,7 +416,7 @@ namespace ChecklistLogin
     </LogonTrigger>
     <SessionStateChangeTrigger>
       <Enabled>true</Enabled>
-      <StateChange>SessionConnect</StateChange>
+      <StateChange>ConsoleConnect</StateChange>
     </SessionStateChangeTrigger>
     <SessionStateChangeTrigger>
       <Enabled>true</Enabled>
@@ -368,7 +453,7 @@ namespace ChecklistLogin
       <Command>{0}</Command>
     </Exec>
   </Actions>
-</Task>", exePath);
+</Task>", System.Security.SecurityElement.Escape(exePath));
 
                 File.WriteAllText(xmlPath, xmlContent, Encoding.Unicode);
 
@@ -385,6 +470,7 @@ namespace ChecklistLogin
                 using (Process p = Process.Start(psi))
                 {
                     p.WaitForExit();
+                    if (p.ExitCode != 0) throw new Exception("Falha ao registrar tarefa: " + p.ExitCode);
                 }
 
                 if (File.Exists(xmlPath))
@@ -395,6 +481,7 @@ namespace ChecklistLogin
             catch (Exception ex)
             {
                 Debug.WriteLine("Install error: " + ex.Message);
+                Environment.ExitCode = 1;
             }
         }
 
@@ -521,12 +608,39 @@ namespace ChecklistLogin
         private Button _btnSubmit;
         private TextBlock _progressText;
         private Border _progressBarFill;
+        private TextBlock _customTitle, _customSubtitle, _customNotice;
+        private Image _customImage;
+        private Border _customPanel;
+        private void ApplyAppearance()
+        {
+            _customTitle.Text = RemoteAppearance.Get("title", "Checklist de Equipamentos");
+            _customSubtitle.Text = RemoteAppearance.Get("subtitle", "SISTEMA DE VERIFICAÇÃO INSTITUCIONAL");
+            _customSubtitle.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(RemoteAppearance.Get("accent", "#1A4B9F")));
+            _progressBarFill.Background = _customSubtitle.Foreground;
+            _customPanel.BorderBrush = _customSubtitle.Foreground;
+            _customNotice.Text = RemoteAppearance.Get("notice", "");
+            _customImage.Source = null;
+            try {
+                string data = RemoteAppearance.Get("image", "");
+                if (data.StartsWith("data:image/png;base64,") || data.StartsWith("data:image/jpeg;base64,")) {
+                    byte[] bytes = Convert.FromBase64String(data.Substring(data.IndexOf(',') + 1));
+                    using (var stream = new MemoryStream(bytes)) {
+                        var bitmap = new BitmapImage(); bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                        bitmap.DecodePixelWidth = 1200; bitmap.StreamSource = stream; bitmap.EndInit(); bitmap.Freeze(); _customImage.Source = bitmap;
+                    }
+                }
+            } catch { }
+            _customPanel.Visibility = string.IsNullOrEmpty(_customNotice.Text) && _customImage.Source == null ? Visibility.Collapsed : Visibility.Visible;
+        }
         private AppConfig _config;
 
         public MainWindow(EventWaitHandle showEventWaitHandle)
         {
             _config = AppConfig.Load();
+            RemoteAppearance.LoadCache(_config.Location ?? "PORTO");
             InitUI();
+            ApplyAppearance();
+            RemoteAppearance.Refresh(_config.Location ?? "PORTO", ApplyAppearance);
 
             // Escutar eventos de troca de sessão/logon do Windows
             try
@@ -571,6 +685,7 @@ namespace ChecklistLogin
         {
             _isExplicitShutdown = false;
             ResetForm();
+            RemoteAppearance.Refresh(_config.Location ?? "PORTO", ApplyAppearance);
             Show();
             WindowState = WindowState.Maximized;
             Activate();
@@ -750,6 +865,8 @@ namespace ChecklistLogin
                 FontWeight = FontWeights.Black,
                 Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0F172A"))
             };
+            _customTitle = mainTitle; _customSubtitle = tagText;
+            mainTitle.TextWrapping = TextWrapping.Wrap; tagText.TextWrapping = TextWrapping.Wrap;
             titleStack.Children.Add(tagText);
             titleStack.Children.Add(mainTitle);
             Grid.SetColumn(titleStack, 1);
@@ -848,7 +965,13 @@ namespace ChecklistLogin
                 AddQuestion(cardsPanel, "computador", "Gabinete / Computador liga sem ruídos ou lentidão?", "HARDWARE PRINCIPAL");
             }
 
-            scrollViewer.Content = cardsPanel;
+            var body = new StackPanel();
+            _customNotice = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 16, Margin = new Thickness(12) };
+            _customImage = new Image { MaxHeight = 180, Stretch = Stretch.Uniform, Margin = new Thickness(12) };
+            var announcement = new StackPanel(); announcement.Children.Add(_customNotice); announcement.Children.Add(_customImage);
+            _customPanel = new Border { Background = Brushes.White, CornerRadius = new CornerRadius(12), BorderThickness = new Thickness(0, 4, 0, 0), Margin = new Thickness(8), Child = announcement };
+            body.Children.Add(_customPanel); body.Children.Add(cardsPanel);
+            scrollViewer.Content = body;
             Grid.SetRow(scrollViewer, 1);
             mainGrid.Children.Add(scrollViewer);
 
