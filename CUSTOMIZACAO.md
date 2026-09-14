@@ -1,23 +1,19 @@
-# Agente 2.2.0 — personalização remota
+# Agente 2.3.0 — Cloudinary
 
-O painel está clonado como repositório independente em `painel-log-acesso/` (ignorado no Git do agente). Veja `painel-log-acesso/CUSTOMIZACAO.md` para publicação do painel e das regras Firebase.
+O agente lê a personalização em https://log-acesso.vercel.app/api/appearance e usa o Cloudinary donpjw2ed para fotos, vídeos, textos e configuração por unidade. Não é preciso publicar regras novas do Firebase. O login atual do painel permanece intacto.
 
-O executável atualizado está em `release/ChecklistLogin.exe`. Publique esse arquivo, `version.txt`, `release/ChecklistLogin.exe.sha256` e `release/manifest.json` juntos no repositório utilizado pelo atualizador, após publicar as regras e validar em uma máquina piloto. O push do código não publica automaticamente as regras do Firebase; elas exigem a etapa descrita no guia do painel.
+O painel é um repositório independente em painel-log-acesso/. Siga painel-log-acesso/CLOUDINARY.md para configurar as credenciais do servidor na Vercel e autorizar o UID do administrador. Sem essas variáveis, a publicação é recusada e o agente mantém o conteúdo local ou o padrão.
 
-O instalador `Instalar_Agente_Checklist_SENAI.exe` existente NÃO foi regenerado: Inno Setup não está instalado nesta máquina. `installer/setup.iss` já indica 2.2.0; para gerar o instalador, disponibilize Inno Setup no caminho configurado em `build.ps1` e execute o build. O build também exige .NET Framework com bibliotecas WPF e System.Web.Extensions.
+O carrossel vertical 9:16 aceita até seis mídias, com título e duração entre 5 e 60 segundos. Vídeos MP4 são exibidos sem som. O QR code padrão é https://helpdeskalunosenai.vercel.app/. O envio das respostas ao Google Sheets é preservado.
 
-Configurações: título, subtítulo, aviso, cor do subtítulo/progresso e imagem PNG/JPEG incorporada, por unidade ou global. O agente consulta o Firestore em segundo plano ao iniciar/reabrir, mantendo as respostas em andamento. O cache fica em `%LOCALAPPDATA%/ChecklistLogin/appearance-UNIDADE.json`, por usuário. Em uma conta sem cache e sem rede, usa a interface padrão.
+## Executável e atualização automática
 
-Validação realizada: compilação do agente com csc, teste `scripts/Test-Appearance.cs`, TypeScript e build de produção do painel. A integração com Firebase e máquinas dos alunos ainda requer a publicação e um teste piloto.
+O executável atual está em release/ChecklistLogin.exe. Publique com version.txt, release/ChecklistLogin.exe.sha256 e release/manifest.json, gerados por build.ps1 -ExecutableOnly. A atualização pelo GitHub continua ativa; a nova versão passa a executar na próxima abertura do processo.
 
-Para repetir o teste do agente depois de compilar `bin/ChecklistLogin.exe`: compile `scripts/Test-Appearance.cs` como console, referenciando `bin/ChecklistLogin.exe`, salve o teste em `bin/TestAppearance.exe` e execute-o. Ele não abre o checklist nem instala o agente.
+O instalador antigo Instalar_Agente_Checklist_SENAI.exe não foi regenerado: falta Inno Setup nesta máquina. Use scripts/Veyon-InstallOrUpdate-PORTO.ps1 para instalar ou atualizar silenciosamente e fixar a unidade PORTO; veja scripts/VEYON-PORTO.md.
 
-## Instalação silenciosa PORTO
+## Cache e validação
 
-Use `scripts/Veyon-InstallOrUpdate-PORTO.ps1` do repositório do agente. Ele instala diretamente o executável atualizado, sem depender do instalador antigo. Consulte `scripts/VEYON-PORTO.md` para o comando, requisitos e diagnóstico. Para recompilar somente o agente e seus hashes, execute `./build.ps1 -ExecutableOnly`.
+Configurações ficam em %LOCALAPPDATA%/ChecklistLogin/appearance-UNIDADE.json. As mídias ficam na subpasta media e são baixadas em segundo plano; falhas não impedem o checklist. A configuração da unidade tem precedência sobre global. O agente preserva respostas ao aplicar uma atualização visual.
 
-## Layout 2.2.0
-
-O agente distribui as perguntas em linhas na coluna esquerda e reserva a direita para carrossel, aviso e suporte. O QR code padrão aponta para https://helpdeskalunosenai.vercel.app/ e já acompanha o executável, inclusive sem configuração remota. O painel inclui prévia completa, modo ampliado e alternância desktop/notebook. A prévia web é uma referência de layout: fontes e dimensões se adaptam no aplicativo Windows.
-
-As regras de `checklistAppearance` devem permitir payload de até 900000 bytes para o carrossel. Publique `firestore.rules` atualizado no banco indicado em `firebase.json`. O conteúdo das fotos permanece público para leitura pelos agentes. A versão antiga do agente não oferece carrossel; distribua 2.2.0 ou posterior.
+Validação: build C# WPF, scripts/Test-Appearance.cs, renderização 1366x768, validação de respostas e preservação das respostas durante atualização. O painel tem testes de QR, serialização, URLs permitidas e bloqueio de publicação sem autenticação. A reprodução real de vídeo e a publicação na conta Cloudinary devem ser conferidas em uma máquina piloto após configurar a Vercel.

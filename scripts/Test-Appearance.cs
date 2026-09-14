@@ -31,6 +31,12 @@ class AppearanceTests {
         } finally { File.Delete(testFile); }
         string slideJson = "[{\"id\":\"a\",\"image\":\"data:image/png;base64,AA==\",\"title\":\"Aviso\",\"seconds\":10}]";
         if (RemoteAppearance.ValidateSlides(slideJson).Count != 1) throw new Exception("Valid carousel rejected");
+        string cloudImage = "https://res.cloudinary.com/donpjw2ed/image/upload/v123/checklist/media/photo.jpg";
+        if (RemoteAppearance.ValidateSlides(slideJson.Replace("data:image/png;base64,AA==", cloudImage)).Count != 1) throw new Exception("Cloudinary rejected");
+        if (MediaCache.IsAllowed(cloudImage.Replace("donpjw2ed", "other"), "image") || MediaCache.IsAllowed(cloudImage + "?redirect=1", "image")) throw new Exception("Untrusted media allowed");
+        string video = "https://res.cloudinary.com/donpjw2ed/video/upload/vc_h264,ac_aac/v1/video.mp4";
+        if (!MediaCache.IsAllowed(video, "video") || MediaCache.IsAllowed(video, "image")) throw new Exception("Video validation failed");
+        if (MediaCache.FileFor(video) != MediaCache.FileFor(video) || !MediaCache.FileFor(video).EndsWith(".mp4")) throw new Exception("Cache key invalid");
         foreach (var invalidSlides in new[] { slideJson.Replace(":10", ":0"), slideJson.Replace(":10", ":61"), slideJson.Replace("data:image/png;base64,AA==", "file:///C:/private.png") }) {
             bool rejected = false;
             try { RemoteAppearance.ValidateSlides(invalidSlides); } catch { rejected = true; }

@@ -31,7 +31,7 @@ namespace ChecklistLogin
     public static class RemoteAppearance
     {
         private static readonly string CacheFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChecklistLogin");
-        private const string Endpoint = "https://firestore.googleapis.com/v1/projects/gen-lang-client-0375839871/databases/ai-studio-remixlogexplorer-d706c4ad-7968-40a7-a99d-147b9ef38ec8/documents/checklistAppearance/";
+        private const string Endpoint = "https://log-acesso.vercel.app/api/appearance?scope=";
         private static int _refreshing;
         public static Dictionary<string, string> Current = new Dictionary<string, string>();
         private static string CacheFile(string location) { return Path.Combine(CacheFolder, "appearance-" + Regex.Replace(location, "[^A-Za-z0-9]", "_") + ".json"); }
@@ -57,7 +57,7 @@ namespace ChecklistLogin
             var slides = new JavaScriptSerializer().Deserialize<List<AnnouncementSlide>>(json);
             if (slides == null || slides.Count > 6) throw new Exception("Invalid slides");
             foreach (var slide in slides) {
-                if (slide == null || slide.image == null || slide.image.Length > 280000 || (!slide.image.StartsWith("data:image/jpeg;base64,") && !slide.image.StartsWith("data:image/png;base64,")) || slide.title == null || slide.title.Length > 100 || slide.seconds < 5 || slide.seconds > 60) throw new Exception("Invalid slide");
+                if (slide == null || slide.image == null || slide.image.Length > 280000 || (!string.IsNullOrEmpty(slide.kind) && slide.kind != "image" && slide.kind != "video") || (!MediaCache.IsAllowed(slide.image, slide.kind) && !(slide.kind != "video" && (slide.image.StartsWith("data:image/jpeg;base64,") || slide.image.StartsWith("data:image/png;base64,")))) || slide.title == null || slide.title.Length > 100 || slide.seconds < 5 || slide.seconds > 60) throw new Exception("Invalid slide");
             }
             return slides;
         }
@@ -76,7 +76,7 @@ namespace ChecklistLogin
                     foreach (string scope in new string[] { location, "global" }) {
                         try {
                             var request = (HttpWebRequest)WebRequest.Create(Endpoint + Uri.EscapeDataString(scope));
-                            request.Timeout = 4000; request.ReadWriteTimeout = 4000;
+                            request.Timeout = 15000; request.ReadWriteTimeout = 15000;
                             using (var result = request.GetResponse())
                             using (var reader = new StreamReader(result.GetResponseStream())) {
                                 char[] buffer = new char[1200001]; int total = 0, count;
@@ -92,14 +92,22 @@ namespace ChecklistLogin
                     }
                     if (response == null) return;
                     var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(response);
-                    var fields = (Dictionary<string, object>)root["fields"];
-                    string payload = (string)((Dictionary<string, object>)fields["payload"])["stringValue"];
+                    string payload = (string)root["payload"];
                     var parsed = Parse(payload);
                     Directory.CreateDirectory(CacheFolder);
                     File.WriteAllText(CacheFile(location) + ".tmp", payload);
                     if (File.Exists(CacheFile(location))) File.Replace(CacheFile(location) + ".tmp", CacheFile(location), null);
                     else File.Move(CacheFile(location) + ".tmp", CacheFile(location));
                     Application.Current.Dispatcher.Invoke(new Action(delegate { Current = parsed; done(); }));
+                    string slides;
+                    if (parsed.TryGetValue("slides", out slides)) {
+                        var media = ValidateSlides(slides);
+                        foreach (var slide in media) {
+                            try { MediaCache.Download(slide); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
+                        }
+                        Application.Current.Dispatcher.Invoke(new Action(delegate { done(); }));
+                        MediaCache.Cleanup();
+                    }
                 } catch (Exception ex) { Debug.WriteLine("Appearance: " + ex.Message); }
                 finally { Interlocked.Exchange(ref _refreshing, 0); }
             });
@@ -109,7 +117,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.2.1";
+        public const string CurrentVersion = "2.3.0";
 
         // URL raw do arquivo version.txt no repositório GitHub
         private const string VersionUrl =

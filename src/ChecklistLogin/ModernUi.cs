@@ -7,6 +7,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using System.Net;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ChecklistLogin
 {
@@ -14,8 +18,55 @@ namespace ChecklistLogin
     {
         public string id { get; set; }
         public string image { get; set; }
+        public string kind { get; set; }
         public string title { get; set; }
         public int seconds { get; set; }
+    }
+
+    public static class MediaCache
+    {
+        private static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChecklistLogin", "media");
+        public static bool IsAllowed(string value, string kind) {
+            Uri uri;
+            string type = kind == "video" ? "video" : "image";
+            return value != null && value.Length <= 2000 && Uri.TryCreate(value, UriKind.Absolute, out uri) && uri.Scheme == "https" && uri.Host == "res.cloudinary.com" && uri.IsDefaultPort && uri.UserInfo == "" && uri.Query == "" && uri.Fragment == "" && uri.AbsolutePath.StartsWith("/donpjw2ed/" + type + "/upload/", StringComparison.Ordinal) && Regex.IsMatch(uri.AbsolutePath, type == "video" ? @"\.mp4$" : @"\.(png|jpe?g|webp)$", RegexOptions.IgnoreCase);
+        }
+        public static string FileFor(string url) {
+            using (var hash = SHA256.Create()) return Path.Combine(Folder, BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(url))).Replace("-", "") + (url.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ? ".mp4" : ".jpg"));
+        }
+        public static void Download(AnnouncementSlide slide) {
+            if (!IsAllowed(slide.image, slide.kind)) return;
+            string target = FileFor(slide.image);
+            if (File.Exists(target)) { File.SetLastWriteTimeUtc(target, DateTime.UtcNow); return; }
+            Directory.CreateDirectory(Folder);
+            string temporary = target + ".tmp";
+            try {
+                var request = (HttpWebRequest)WebRequest.Create(slide.image);
+                request.Timeout = 45000; request.ReadWriteTimeout = 10000; request.AllowAutoRedirect = false;
+                long limit = (slide.kind == "video" ? 60L : 10L) * 1024 * 1024;
+                var deadline = DateTime.UtcNow.AddSeconds(90);
+                using (var response = (HttpWebResponse)request.GetResponse()) {
+                    if (response.StatusCode != HttpStatusCode.OK || response.ContentLength > limit) throw new Exception("Invalid media response");
+                    using (var input = response.GetResponseStream())
+                    using (var output = File.Create(temporary)) {
+                        byte[] buffer = new byte[65536]; int count; long total = 0;
+                        while ((count = input.Read(buffer, 0, buffer.Length)) > 0) {
+                            total += count;
+                            if (total > limit || DateTime.UtcNow > deadline) throw new Exception("Media download limit");
+                            output.Write(buffer, 0, count);
+                        }
+                        if (total == 0) throw new Exception("Empty media");
+                    }
+                }
+                File.Move(temporary, target);
+            } finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+        public static void Cleanup() {
+            if (!Directory.Exists(Folder)) return;
+            foreach (string file in Directory.GetFiles(Folder)) {
+                try { if (File.GetLastWriteTimeUtc(file) < DateTime.UtcNow.AddDays(-7)) File.Delete(file); } catch { }
+            }
+        }
     }
 
     public partial class MainWindow
@@ -31,6 +82,7 @@ namespace ChecklistLogin
         private Border _supportPanel;
         private FrameworkElement _welcome;
         private Button _pauseCarousel;
+        private MediaElement _video;
         private Brush Ink { get { return Brush("#142842"); } }
         private static SolidColorBrush Brush(string hex) { return new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)); }
         private TextBlock Label(string text, double size, string color, bool bold)
@@ -43,6 +95,14 @@ namespace ChecklistLogin
         }
         private BitmapSource DecodePicture(string data)
         {
+            if (MediaCache.IsAllowed(data, "image")) {
+                string cached = MediaCache.FileFor(data);
+                if (!File.Exists(cached)) return null;
+                using (var file = File.OpenRead(cached)) {
+                    var image = new BitmapImage(); image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad; image.DecodePixelWidth = 1400;
+                    image.StreamSource = file; image.EndInit(); image.Freeze(); return image;
+                }
+            }
             if (string.IsNullOrEmpty(data) || (!data.StartsWith("data:image/png;base64,") && !data.StartsWith("data:image/jpeg;base64,"))) return null;
             using (var stream = new MemoryStream(Convert.FromBase64String(data.Substring(data.IndexOf(',') + 1)))) {
                 var bitmap = new BitmapImage(); bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad;
@@ -77,9 +137,17 @@ namespace ChecklistLogin
         private void ShowSlide()
         {
             _carouselTimer.Stop(); _customImage.Source = null;
+            _video.Stop(); _video.Source = null; _video.Visibility = Visibility.Collapsed;
+            bool hasVideo = false;
             if (_slides.Count > 0) {
                 _slideIndex = (_slideIndex + _slides.Count) % _slides.Count;
-                try { _customImage.Source = DecodePicture(_slides[_slideIndex].image); } catch { }
+                try {
+                    var slide = _slides[_slideIndex];
+                    if (slide.kind == "video" && MediaCache.IsAllowed(slide.image, "video") && File.Exists(MediaCache.FileFor(slide.image))) {
+                        _video.Source = new Uri(MediaCache.FileFor(slide.image)); _video.Visibility = Visibility.Visible; hasVideo = true;
+                        if (!_carouselPaused && IsVisible) _video.Play();
+                    } else _customImage.Source = DecodePicture(slide.image);
+                } catch { }
                 _slideTitle.Text = _slides[_slideIndex].title;
                 _slideCount.Text = (_slideIndex + 1) + " / " + _slides.Count;
                 _carouselTimer.Interval = TimeSpan.FromSeconds(Math.Max(5, Math.Min(60, _slides[_slideIndex].seconds)));
@@ -87,7 +155,7 @@ namespace ChecklistLogin
             } else {
                 _slideTitle.Text = "Bem-vindo ao seu espaço de aprendizagem"; _slideCount.Text = "SENAI · " + (_config.Location ?? "PORTO");
             }
-            _welcome.Visibility = _customImage.Source == null ? Visibility.Visible : Visibility.Collapsed;
+            _welcome.Visibility = _customImage.Source == null && !hasVideo ? Visibility.Visible : Visibility.Collapsed;
         }
         private Button CarouselButton(string label, string tooltip, RoutedEventHandler action)
         {
@@ -100,8 +168,8 @@ namespace ChecklistLogin
             WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize; Topmost = true; ShowInTaskbar = true; Background = Brush("#F1F5F9");
             PreviewKeyDown += delegate(object sender, KeyEventArgs e) { if ((e.Key == Key.System && e.SystemKey == Key.F4) || e.Key == Key.Escape) e.Handled = true; };
             _carouselTimer = new DispatcherTimer(); _carouselTimer.Tick += delegate { _slideIndex++; ShowSlide(); };
-            IsVisibleChanged += delegate { if (IsVisible) ShowSlide(); else _carouselTimer.Stop(); };
-            Closed += delegate { _carouselTimer.Stop(); };
+            IsVisibleChanged += delegate { if (IsVisible) ShowSlide(); else { _carouselTimer.Stop(); if (_video != null) _video.Stop(); } };
+            Closed += delegate { _carouselTimer.Stop(); if (_video != null) _video.Close(); };
             var root = new Grid { Background = Brush("#F1F5F9") };
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -150,10 +218,18 @@ namespace ChecklistLogin
             welcomeStack.Children.Add(Label("Tecnologia, conhecimento e novas possibilidades em cada aula.", 12, "#CEE5FF", false));
             _welcome = new Border { Background = new LinearGradientBrush(Color.FromRgb(18, 59, 115), Color.FromRgb(22, 108, 170), 30), Child = new Viewbox { Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly, Child = welcomeStack } };
             media.Children.Add(_welcome); _customImage = new Image { Stretch = Stretch.Uniform }; media.Children.Add(_customImage); Grid.SetRow(media, 1); carousel.Children.Add(media);
+            _video = new MediaElement { LoadedBehavior = MediaState.Manual, UnloadedBehavior = MediaState.Close, IsMuted = true, Volume = 0, Stretch = Stretch.Uniform, Visibility = Visibility.Collapsed };
+            _video.MediaEnded += delegate { if (!_carouselPaused && IsVisible) { _video.Position = TimeSpan.Zero; _video.Play(); } };
+            _video.MediaFailed += delegate { _video.Stop(); _video.Visibility = Visibility.Collapsed; _welcome.Visibility = Visibility.Visible; };
+            media.Children.Add(_video);
             var bottom = new DockPanel { Margin = new Thickness(12, 6, 12, 6) };
             var controls = new StackPanel { Orientation = Orientation.Horizontal }; DockPanel.SetDock(controls, Dock.Right);
             controls.Children.Add(CarouselButton("‹", "Foto anterior", delegate { _slideIndex--; ShowSlide(); }));
-            _pauseCarousel = CarouselButton("Ⅱ", "Pausar ou reproduzir", delegate { _carouselPaused = !_carouselPaused; _pauseCarousel.Content = _carouselPaused ? "▶" : "Ⅱ"; ShowSlide(); }); controls.Children.Add(_pauseCarousel);
+            _pauseCarousel = CarouselButton("Ⅱ", "Pausar ou reproduzir", delegate {
+                _carouselPaused = !_carouselPaused; _pauseCarousel.Content = _carouselPaused ? "▶" : "Ⅱ";
+                if (_carouselPaused) { _carouselTimer.Stop(); _video.Pause(); }
+                else { if (_slides.Count > 1 && IsVisible) _carouselTimer.Start(); if (_video.Source != null && IsVisible) _video.Play(); }
+            }); controls.Children.Add(_pauseCarousel);
             controls.Children.Add(CarouselButton("›", "Próxima foto", delegate { _slideIndex++; ShowSlide(); })); bottom.Children.Add(controls);
             _slideTitle = Label("", 10, "#334B65", true); _slideTitle.VerticalAlignment = VerticalAlignment.Center; _slideTitle.TextWrapping = TextWrapping.NoWrap; _slideTitle.TextTrimming = TextTrimming.CharacterEllipsis; bottom.Children.Add(_slideTitle); Grid.SetRow(bottom, 2); carousel.Children.Add(bottom);
             var carouselSurface = Surface(carousel, new Thickness(0)); carouselSurface.ClipToBounds = true; right.Children.Add(carouselSurface);
