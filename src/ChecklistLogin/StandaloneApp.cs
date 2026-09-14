@@ -20,14 +20,21 @@ namespace ChecklistLogin
 {
     // ─────────────────────────────────────────────────────────────────────────
     // AUTO-UPDATER — verifica e aplica novas versões em segundo plano
+    // Estratégia: lê version.txt direto do repo GitHub e baixa o .exe raw
+    // Para publicar nova versão: basta compilar, copiar para release/ e git push
     // ─────────────────────────────────────────────────────────────────────────
     public static class AutoUpdater
     {
-        // Versão atual do executável — incrementar a cada release no GitHub
+        // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
         public const string CurrentVersion = "2.0.2";
 
-        private const string GitHubApiUrl =
-            "https://api.github.com/repos/davimluiz/agente-cheklist/releases/latest";
+        // URL raw do arquivo version.txt no repositório GitHub
+        private const string VersionUrl =
+            "https://raw.githubusercontent.com/admregionalvitoria-sudo/agentechecklist/main/version.txt";
+
+        // URL raw do executável ChecklistLogin.exe no repositório GitHub
+        private const string ExeUrl =
+            "https://raw.githubusercontent.com/admregionalvitoria-sudo/agentechecklist/main/release/ChecklistLogin.exe";
 
         // Limpa arquivos .old deixados por actualizações anteriores
         public static void CleanupOldFiles()
@@ -53,38 +60,29 @@ namespace ChecklistLogin
         {
             try
             {
-                // 1. Busca a release mais recente na API do GitHub
-                string json = FetchJson(GitHubApiUrl);
-                if (string.IsNullOrWhiteSpace(json)) return;
+                // 1. Lê version.txt direto do repositório GitHub (sem autenticação)
+                string remoteVersion = FetchText(VersionUrl);
+                if (string.IsNullOrWhiteSpace(remoteVersion)) return;
+                remoteVersion = remoteVersion.Trim().TrimStart('v', 'V');
 
-                // Extrai a tag_name (ex: "v2.0.3")
-                string remoteTag = ExtractJsonString(json, "tag_name");
-                if (string.IsNullOrWhiteSpace(remoteTag)) return;
-
-                string remoteVersion = remoteTag.TrimStart('v', 'V');
-
-                // 2. Compara versões
+                // 2. Compara com a versão local
                 if (!IsNewerVersion(remoteVersion, CurrentVersion)) return;
 
-                // 3. Localiza o asset ChecklistLogin.exe nos assets da release
-                string downloadUrl = FindExeAssetUrl(json);
-                if (string.IsNullOrWhiteSpace(downloadUrl)) return;
-
-                // 4. Baixa o novo executável para arquivo temporário
-                string exePath = Process.GetCurrentProcess().MainModule.FileName;
-                string exeDir  = Path.GetDirectoryName(exePath);
+                // 3. Baixa o novo ChecklistLogin.exe diretamente do repositório
+                string exePath  = Process.GetCurrentProcess().MainModule.FileName;
+                string exeDir   = Path.GetDirectoryName(exePath);
                 string tempPath = Path.Combine(exeDir, "ChecklistLogin_update.tmp");
 
-                DownloadFile(downloadUrl, tempPath);
+                DownloadFile(ExeUrl, tempPath);
 
-                // Valida se o download resultou num arquivo válido (> 10 KB)
+                // 4. Valida arquivo (> 10 KB)
                 if (!File.Exists(tempPath) || new FileInfo(tempPath).Length < 10240)
                 {
                     try { File.Delete(tempPath); } catch { }
                     return;
                 }
 
-                // 5. Troca atômica: renomeia o atual para .old e coloca o novo no lugar
+                // 5. Troca atômica: renomeia atual para .old, coloca novo no lugar
                 //    No Windows um EXE em execução não pode ser sobrescrito, mas PODE ser renomeado.
                 string oldPath = exePath + ".old";
                 try { File.Delete(oldPath); } catch { }
@@ -92,20 +90,19 @@ namespace ChecklistLogin
                 File.Move(exePath, oldPath);   // exe_atual -> exe_atual.old
                 File.Move(tempPath, exePath);  // novo_tmp  -> exe_atual
 
-                // 6. Agenda relançamento do processo para aplicar atualização silenciosamente
-                //    O processo atual continua rodando normalmente até o próximo logon/reopen.
+                // Atualização aplicada — entrará em vigor no próximo logon/reinício do agente
             }
-            catch { /* Falhas são silenciosas — app continua funcionando sem interrupção */ }
+            catch { /* Falhas são silenciosas — app continua funcionando normalmente */ }
         }
 
-        private static string FetchJson(string url)
+        // Baixa texto simples de uma URL (para ler version.txt)
+        private static string FetchText(string url)
         {
             try
             {
                 HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
                 req.UserAgent = "ChecklistLogin-Updater/" + CurrentVersion;
-                req.Timeout   = 10000; // 10 segundos máximo
-                req.Accept    = "application/vnd.github.v3+json";
+                req.Timeout   = 10000;
 
                 using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
                 using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
@@ -138,35 +135,6 @@ namespace ChecklistLogin
             {
                 try { if (File.Exists(destination)) File.Delete(destination); } catch { }
             }
-        }
-
-        // Localiza a URL de download do asset ChecklistLogin.exe dentro do JSON da release
-        private static string FindExeAssetUrl(string json)
-        {
-            // Procura pelo bloco de asset cujo name contém "ChecklistLogin.exe" ou similar
-            // Formato GitHub: "browser_download_url": "https://..."
-            MatchCollection blocks = Regex.Matches(json,
-                @"\{[^{}]*?\""name\"\s*:\s*\"([^\"]*ChecklistLogin[^\"]*\.exe)[^{}]*?\"browser_download_url\"\s*:\s*\"([^\"]+)\"[^{}]*?\}",
-                RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-            foreach (Match m in blocks)
-            {
-                if (m.Success) return m.Groups[2].Value;
-            }
-
-            // Fallback: busca qualquer browser_download_url que termine em .exe
-            Match fallback = Regex.Match(json,
-                @"\"browser_download_url\"\s*:\s*\"(https://[^\"]+\.exe)\"",
-                RegexOptions.IgnoreCase);
-            return fallback.Success ? fallback.Groups[1].Value : null;
-        }
-
-        private static string ExtractJsonString(string json, string key)
-        {
-            Match m = Regex.Match(json,
-                "\"" + key + "\"\\s*:\\s*\"([^\"]+)\"",
-                RegexOptions.IgnoreCase);
-            return m.Success ? m.Groups[1].Value : null;
         }
 
         // Retorna true se remoteVersion é estritamente maior que localVersion

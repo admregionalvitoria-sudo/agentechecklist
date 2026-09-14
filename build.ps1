@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "=========================================" -ForegroundColor Cyan
-Write-Host " Compilando Agente de Checklist SENAI   " -ForegroundColor Cyan
+Write-Host "  Compilando Agente de Checklist SENAI   " -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 
 $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -13,6 +13,8 @@ $BinDir = "$PSScriptRoot\bin"
 $TargetExe = "$BinDir\ChecklistLogin.exe"
 $InstallerIss = "$PSScriptRoot\installer\setup.iss"
 $FinalInstaller = "$PSScriptRoot\Instalar_Agente_Checklist_SENAI.exe"
+$ReleaseDir = "$PSScriptRoot\release"
+$VersionFile = "$PSScriptRoot\version.txt"
 
 # 1. Limpar instaladores/executáveis legados da raiz
 Write-Host "Limpando arquivos legados da raiz..." -ForegroundColor Yellow
@@ -21,6 +23,7 @@ Remove-Item -Path "$PSScriptRoot\Instalar_Agente_Checklist.exe" -Force -ErrorAct
 Remove-Item -Path "$PSScriptRoot\Output" -Recurse -Force -ErrorAction SilentlyContinue
 
 if (-not (Test-Path $BinDir)) { New-Item -ItemType Directory -Path $BinDir | Out-Null }
+if (-not (Test-Path $ReleaseDir)) { New-Item -ItemType Directory -Path $ReleaseDir | Out-Null }
 
 # 2. Compilar C# Standalone Application na pasta temporária bin\
 Write-Host "Compilando executável do agente C# WPF..." -ForegroundColor Yellow
@@ -31,7 +34,24 @@ if (Test-Path $CscPath) {
     Write-Error "Compilador Roslyn csc.exe não encontrado em: $CscPath"
 }
 
-# 3. Gerar Instalador Único via Inno Setup
+# 3. Extrair versão atual do StandaloneApp.cs e atualizar version.txt + release/
+$versionMatch = Select-String -Path $SourceCs -Pattern 'CurrentVersion\s*=\s*"([\d.]+)"' | Select-Object -First 1
+if ($versionMatch) {
+    $currentVersion = $versionMatch.Matches[0].Groups[1].Value
+    Write-Host "Versão detectada: $currentVersion" -ForegroundColor Cyan
+
+    # Atualiza version.txt (usado pelo auto-updater nas máquinas)
+    Set-Content -Path $VersionFile -Value $currentVersion -Encoding UTF8
+    Write-Host "version.txt atualizado: $currentVersion" -ForegroundColor Green
+
+    # Copia o exe compilado para release/ (baixado pelas máquinas no auto-update)
+    Copy-Item -Path $TargetExe -Destination "$ReleaseDir\ChecklistLogin.exe" -Force
+    Write-Host "release\ChecklistLogin.exe copiado para auto-update!" -ForegroundColor Green
+} else {
+    Write-Warning "Não foi possível detectar CurrentVersion no código-fonte."
+}
+
+# 4. Gerar Instalador Único via Inno Setup
 Write-Host "Gerando instalador único executável via Inno Setup..." -ForegroundColor Yellow
 if (Test-Path $IsccPath) {
     & $IsccPath "$InstallerIss" | Out-Null
@@ -41,14 +61,18 @@ if (Test-Path $IsccPath) {
 
     if (Test-Path $FinalInstaller) {
         Write-Host "=========================================" -ForegroundColor Green
-        Write-Host " INSTALADOR ÚNICO GERADO COM SUCESSO!   " -ForegroundColor Green
-        Write-Host " Arquivo: $FinalInstaller" -ForegroundColor Green
+        Write-Host "  INSTALADOR ÚNICO GERADO COM SUCESSO!   " -ForegroundColor Green
+        Write-Host "  Arquivo: $FinalInstaller" -ForegroundColor Green
         Write-Host "=========================================" -ForegroundColor Green
+        Write-Host ""
+        Write-Host ">>> PRÓXIMO PASSO: Publicar atualização para as máquinas" -ForegroundColor Magenta
+        Write-Host "    git add ." -ForegroundColor White
+        Write-Host "    git commit -m `"feat: versão $currentVersion`"" -ForegroundColor White
+        Write-Host "    git push" -ForegroundColor White
+        Write-Host "    As máquinas se atualizam automaticamente na próxima conexão!" -ForegroundColor Green
     } else {
         Write-Error "Falha ao gerar o arquivo de instalação final."
     }
 } else {
     Write-Error "Inno Setup Compiler (ISCC.exe) não encontrado em: $IsccPath"
 }
-
-
