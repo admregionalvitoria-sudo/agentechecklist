@@ -109,7 +109,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.2.0";
+        public const string CurrentVersion = "2.2.1";
 
         // URL raw do arquivo version.txt no repositório GitHub
         private const string VersionUrl =
@@ -729,7 +729,7 @@ namespace ChecklistLogin
         private void AddQuestion(Panel container, string id, string title, string category)
         {
             var q = new ChecklistQuestion { Id = id, Title = title, Category = category };
-            q.CardBorder = Surface(null, new Thickness(14, 10, 14, 10));
+            q.CardBorder = Surface(null, new Thickness(14, 8, 14, 8));
             q.CardBorder.Margin = new Thickness(0, 0, 0, 8); q.CardBorder.MinHeight = 84;
             var layout = new Grid { VerticalAlignment = VerticalAlignment.Center };
             layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(46) });

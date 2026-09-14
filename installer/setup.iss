@@ -1,6 +1,6 @@
 ﻿; Inno Setup Script - Instalador Único do Agente de Checklist SENAI
 #define MyAppName "Agente de Checklist SENAI"
-#define MyAppVersion "2.2.0"
+#define MyAppVersion "2.2.1"
 #define MyAppPublisher "SENAI - Serviço Nacional de Aprendizagem Industrial"
 #define MyAppExeName "ChecklistLogin.exe"
 

@@ -121,10 +121,11 @@ namespace ChecklistLogin
             root.Children.Add(new Border { Child = header, Background = Brushes.White, BorderBrush = Brush("#E1E7EF"), BorderThickness = new Thickness(0, 0, 0, 1) });
 
             var body = new Grid { Margin = new Thickness(30, 22, 30, 22) };
-            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.13, GridUnitType.Star) });
-            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
             body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            var left = new Grid(); left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); left.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
+            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(280) });
+            body.SizeChanged += delegate { body.ColumnDefinitions[2].Width = new GridLength(Math.Max(210, Math.Min(480, (body.ActualHeight - 76) * 9.0 / 16.0 + 2))); };
+            var left = new Grid(); left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); left.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var section = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
             section.Children.Add(Label("Vamos conferir seu equipamento?", 18, "#142842", true)); section.Children.Add(Label("Responda todos os itens para começar sua aula.", 11, "#748399", false)); left.Children.Add(section);
             var cards = new StackPanel();
@@ -135,7 +136,7 @@ namespace ChecklistLogin
             AddQuestion(cards, "internet", "Internet / Rede", "A conexão com a rede está funcionando?");
             if (!notebook) AddQuestion(cards, "computador", "Computador", "Liga sem ruídos ou lentidão?");
             var questionScroll = new ScrollViewer { Content = cards, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalContentAlignment = HorizontalAlignment.Stretch };
-            questionScroll.SizeChanged += delegate { foreach (var q in _questions) q.CardBorder.MinHeight = Math.Max(80, (questionScroll.ActualHeight / _questions.Count) - 9); };
+            questionScroll.SizeChanged += delegate { foreach (var q in _questions) q.CardBorder.MinHeight = Math.Max(64, (questionScroll.ActualHeight / _questions.Count) - 9); };
             Grid.SetRow(questionScroll, 1); left.Children.Add(questionScroll);
             var tip = Label("Seu cuidado mantém o laboratório pronto para todos.", 10, "#8190A4", false); tip.Margin = new Thickness(4, 8, 0, 0); Grid.SetRow(tip, 2); left.Children.Add(tip); body.Children.Add(left);
 
@@ -143,7 +144,7 @@ namespace ChecklistLogin
             var carousel = new Grid(); carousel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); carousel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); carousel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var top = new DockPanel { Margin = new Thickness(16, 12, 16, 12) }; _slideCount = Label("", 9, "#627890", true); _slideCount.HorizontalAlignment = HorizontalAlignment.Right; DockPanel.SetDock(_slideCount, Dock.Right); top.Children.Add(_slideCount); top.Children.Add(Label("FIQUE POR DENTRO", 9, "#164194", true)); carousel.Children.Add(top);
             var media = new Grid { Background = Brush("#EAF0F7"), ClipToBounds = true };
-            var welcomeStack = new StackPanel { Width = 500, Margin = new Thickness(28), VerticalAlignment = VerticalAlignment.Center };
+            var welcomeStack = new StackPanel { Width = 240, Margin = new Thickness(28), VerticalAlignment = VerticalAlignment.Center };
             welcomeStack.Children.Add(Label("APRENDER. CRIAR. TRANSFORMAR.", 9, "#9CD7FF", true));
             var welcomeTitle = Label("Seu próximo passo\ncomeça aqui.", 32, "#FFFFFF", true); welcomeTitle.Margin = new Thickness(0, 15, 0, 12); welcomeStack.Children.Add(welcomeTitle);
             welcomeStack.Children.Add(Label("Tecnologia, conhecimento e novas possibilidades em cada aula.", 12, "#CEE5FF", false));
@@ -157,11 +158,16 @@ namespace ChecklistLogin
             _slideTitle = Label("", 10, "#334B65", true); _slideTitle.VerticalAlignment = VerticalAlignment.Center; _slideTitle.TextWrapping = TextWrapping.NoWrap; _slideTitle.TextTrimming = TextTrimming.CharacterEllipsis; bottom.Children.Add(_slideTitle); Grid.SetRow(bottom, 2); carousel.Children.Add(bottom);
             var carouselSurface = Surface(carousel, new Thickness(0)); carouselSurface.ClipToBounds = true; right.Children.Add(carouselSurface);
             var noticeStack = new StackPanel(); noticeStack.Children.Add(Label("INFORMATIVO", 9, "#164194", true)); _customNotice = Label("", 11, "#334B65", false); _customNotice.Margin = new Thickness(0, 4, 0, 0); noticeStack.Children.Add(_customNotice);
-            _customPanel = new Border { Background = Brush("#E7EEF9"), CornerRadius = new CornerRadius(10), BorderThickness = new Thickness(3, 0, 0, 0), Padding = new Thickness(14, 10, 14, 10), Margin = new Thickness(0, 12, 0, 0), Child = new ScrollViewer { MaxHeight = 70, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = noticeStack } }; Grid.SetRow(_customPanel, 1); right.Children.Add(_customPanel);
+            _customPanel = new Border { Background = Brush("#E7EEF9"), CornerRadius = new CornerRadius(10), BorderThickness = new Thickness(3, 0, 0, 0), Padding = new Thickness(14, 10, 14, 10), Margin = new Thickness(0, 12, 0, 0), Child = new ScrollViewer { MaxHeight = 70, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = noticeStack } }; Grid.SetRow(_customPanel, 1); 
             var support = new Grid(); support.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(114) }); support.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             _qrImage = new Image { Width = 102, Height = 102, Stretch = Stretch.Uniform }; support.Children.Add(_qrImage);
             var supportText = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) }; supportText.Children.Add(Label("SUPORTE AO ALUNO", 9, "#8393A6", true)); _supportTitle = Label("", 19, "#142842", true); supportText.Children.Add(_supportTitle); supportText.Children.Add(Label("Aponte a câmera do celular e abra seu chamado.", 11, "#718096", false)); var supportHint = Label("Abrir chamado  →", 11, "#164194", true); supportHint.Margin = new Thickness(0, 8, 0, 0); supportText.Children.Add(supportHint); Grid.SetColumn(supportText, 1); support.Children.Add(supportText);
-            _supportPanel = Surface(support, new Thickness(14, 8, 14, 8)); _supportPanel.Margin = new Thickness(0, 12, 0, 0); Grid.SetRow(_supportPanel, 2); right.Children.Add(_supportPanel);
+            _supportPanel = Surface(support, new Thickness(14, 8, 14, 8)); _supportPanel.Margin = new Thickness(0, 12, 0, 0); Grid.SetRow(_supportPanel, 2); 
+            var information = new Grid(); information.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); information.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            _customPanel.Margin = new Thickness(0, 12, 12, 0); _customPanel.VerticalAlignment = VerticalAlignment.Stretch;
+            Grid.SetRow(_customPanel, 0); information.Children.Add(_customPanel);
+            Grid.SetRow(_supportPanel, 0); Grid.SetColumn(_supportPanel, 1); information.Children.Add(_supportPanel);
+            Grid.SetRow(information, 3); left.Children.Add(information);
             Grid.SetColumn(right, 2); body.Children.Add(right); Grid.SetRow(body, 1); root.Children.Add(body);
 
             var footer = new Grid { Margin = new Thickness(30, 12, 30, 12) }; footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
