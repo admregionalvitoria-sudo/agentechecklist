@@ -543,7 +543,10 @@ namespace ChecklistLogin
                     while (true)
                     {
                         showEventWaitHandle.WaitOne();
-                        Application.Current?.Dispatcher?.Invoke(() => ReopenChecklist());
+                        if (Application.Current != null && Application.Current.Dispatcher != null)
+                        {
+                            Application.Current.Dispatcher.Invoke(new Action(() => ReopenChecklist()));
+                        }
                     }
                 });
             }
@@ -557,7 +560,10 @@ namespace ChecklistLogin
                 e.Reason == SessionSwitchReason.RemoteConnect ||
                 e.Reason == SessionSwitchReason.SessionLock)
             {
-                Application.Current?.Dispatcher?.Invoke(() => ReopenChecklist());
+                if (Application.Current != null && Application.Current.Dispatcher != null)
+                {
+                    Application.Current.Dispatcher.Invoke(new Action(() => ReopenChecklist()));
+                }
             }
         }
 
@@ -1241,7 +1247,7 @@ namespace ChecklistLogin
                 string resumoItens = string.Join("; ", statusList);
 
                 // Dispara o log para a planilha online do Google em segundo plano
-                string location = _config?.Location ?? "PORTO";
+                string location = (_config != null && !string.IsNullOrEmpty(_config.Location)) ? _config.Location : "PORTO";
                 SendToGoogleWebhook(location, machineName, userName, dataHora, statusTela, statusTeclado, statusMouse, statusTouchPad, statusInternet, statusGabinete, statusGeral, resumoItens);
 
                 string primaryFolder = _config.LogFolderPath;

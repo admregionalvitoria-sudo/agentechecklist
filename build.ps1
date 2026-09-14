@@ -6,7 +6,10 @@ Write-Host "  Compilando Agente de Checklist SENAI   " -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 
 $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$CscPath = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\Roslyn\csc.exe"
+$CscPath = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+if (-not (Test-Path $CscPath)) {
+    $CscPath = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\Roslyn\csc.exe"
+}
 $IsccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 $SourceCs = "$PSScriptRoot\src\ChecklistLogin\StandaloneApp.cs"
 $BinDir = "$PSScriptRoot\bin"
@@ -67,7 +70,7 @@ if (Test-Path $IsccPath) {
         Write-Host ""
         Write-Host ">>> PRÓXIMO PASSO: Publicar atualização para as máquinas" -ForegroundColor Magenta
         Write-Host "    git add ." -ForegroundColor White
-        Write-Host "    git commit -m `"feat: versão $currentVersion`"" -ForegroundColor White
+        Write-Host "    git commit -m 'feat: versao $currentVersion'" -ForegroundColor White
         Write-Host "    git push" -ForegroundColor White
         Write-Host "    As máquinas se atualizam automaticamente na próxima conexão!" -ForegroundColor Green
     } else {
