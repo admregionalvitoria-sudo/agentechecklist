@@ -4,48 +4,65 @@
 
 @layer base {
   body {
-    @apply bg-slate-50 text-slate-900 font-sans antialiased overflow-x-hidden selection:bg-senai-blue/20 selection:text-senai-blue;
+    @apply bg-white text-slate-900 font-sans antialiased overflow-x-hidden selection:bg-senai-blue/20 selection:text-senai-blue;
     background-image: 
-      radial-gradient(at 0% 0%, rgba(22, 65, 148, 0.04) 0px, transparent 50%),
-      radial-gradient(at 100% 0%, rgba(232, 73, 16, 0.04) 0px, transparent 50%),
-      radial-gradient(at 100% 100%, rgba(67, 189, 217, 0.04) 0px, transparent 50%),
-      radial-gradient(at 0% 100%, rgba(76, 49, 137, 0.04) 0px, transparent 50%);
+      radial-gradient(at 10% 10%, rgba(26, 75, 159, 0.07) 0px, transparent 45%),
+      radial-gradient(at 90% 15%, rgba(0, 145, 214, 0.07) 0px, transparent 45%),
+      radial-gradient(at 85% 85%, rgba(239, 94, 49, 0.06) 0px, transparent 45%),
+      radial-gradient(at 15% 85%, rgba(26, 75, 159, 0.05) 0px, transparent 45%);
     background-attachment: fixed;
   }
 }
 
 /* Glassmorphism & Liquid Glass Utilities */
 .glass-panel {
-  background: rgba(255, 255, 255, 0.75);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  box-shadow: 0 20px 40px -15px rgba(22, 65, 148, 0.07);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 
+    0 20px 50px -15px rgba(26, 75, 159, 0.09),
+    0 1px 0 0 rgba(255, 255, 255, 0.9) inset;
 }
 
 .glass-card {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(226, 232, 240, 0.8);
-  box-shadow: 0 10px 30px -10px rgba(15, 23, 42, 0.05);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(24px) saturate(190%);
+  -webkit-backdrop-filter: blur(24px) saturate(190%);
+  border: 1px solid rgba(226, 232, 240, 0.85);
+  box-shadow: 
+    0 10px 30px -10px rgba(26, 75, 159, 0.06),
+    0 1px 0 0 rgba(255, 255, 255, 0.95) inset;
 }
 
 .glass-card-hover {
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .glass-card-hover:hover {
-  transform: translateY(-2px);
-  background: rgba(255, 255, 255, 0.95);
-  border-color: rgba(67, 189, 217, 0.5);
-  box-shadow: 0 20px 40px -12px rgba(22, 65, 148, 0.12);
+  transform: translateY(-3px);
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(0, 145, 214, 0.45);
+  box-shadow: 
+    0 25px 50px -12px rgba(26, 75, 159, 0.16),
+    0 0 20px 0 rgba(0, 145, 214, 0.15);
+}
+
+.liquid-glass-badge {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 4px 15px rgba(26, 75, 159, 0.05);
 }
 
 /* Shine Sweep Animation */
 @keyframes shine {
+  0% {
+    left: -100%;
+  }
   100% {
-    left: 125%;
+    left: 200%;
   }
 }
 
@@ -61,10 +78,11 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(203, 213, 225, 0.8);
+  background: rgba(0, 145, 214, 0.3);
   border-radius: 9999px;
+  border: 2px solid rgba(255, 255, 255, 0.8);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 1);
+  background: rgba(26, 75, 159, 0.6);
 }

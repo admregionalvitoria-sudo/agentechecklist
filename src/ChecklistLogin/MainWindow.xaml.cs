@@ -27,6 +27,15 @@ namespace ChecklistLogin
             if (DataContext is MainViewModel vm && !vm.CanCloseWindow)
             {
                 e.Cancel = true;
+                WindowState = WindowState.Maximized;
+                Topmost = true;
+                Activate();
+                MessageBox.Show(
+                    "Você precisa responder e concluir todo o checklist de equipamentos antes de fechar a aplicação.",
+                    "Atenção — SENAI",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning
+                );
             }
             base.OnClosing(e);
         }

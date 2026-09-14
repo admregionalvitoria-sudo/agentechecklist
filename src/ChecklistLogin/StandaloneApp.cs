@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Reflection;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -16,6 +18,171 @@ using Microsoft.Win32;
 
 namespace ChecklistLogin
 {
+    // ─────────────────────────────────────────────────────────────────────────
+    // AUTO-UPDATER — verifica e aplica novas versões em segundo plano
+    // ─────────────────────────────────────────────────────────────────────────
+    public static class AutoUpdater
+    {
+        // Versão atual do executável — incrementar a cada release no GitHub
+        public const string CurrentVersion = "2.0.2";
+
+        private const string GitHubApiUrl =
+            "https://api.github.com/repos/davimluiz/agente-cheklist/releases/latest";
+
+        // Limpa arquivos .old deixados por actualizações anteriores
+        public static void CleanupOldFiles()
+        {
+            try
+            {
+                string exeDir = AppDomain.CurrentDomain.BaseDirectory;
+                foreach (string f in Directory.GetFiles(exeDir, "*.old"))
+                {
+                    try { File.Delete(f); } catch { }
+                }
+            }
+            catch { }
+        }
+
+        // Inicia a checagem em segundo plano — não bloqueia a thread principal
+        public static void CheckAndUpdateAsync()
+        {
+            ThreadPool.QueueUserWorkItem(_ => RunUpdateCheck());
+        }
+
+        private static void RunUpdateCheck()
+        {
+            try
+            {
+                // 1. Busca a release mais recente na API do GitHub
+                string json = FetchJson(GitHubApiUrl);
+                if (string.IsNullOrWhiteSpace(json)) return;
+
+                // Extrai a tag_name (ex: "v2.0.3")
+                string remoteTag = ExtractJsonString(json, "tag_name");
+                if (string.IsNullOrWhiteSpace(remoteTag)) return;
+
+                string remoteVersion = remoteTag.TrimStart('v', 'V');
+
+                // 2. Compara versões
+                if (!IsNewerVersion(remoteVersion, CurrentVersion)) return;
+
+                // 3. Localiza o asset ChecklistLogin.exe nos assets da release
+                string downloadUrl = FindExeAssetUrl(json);
+                if (string.IsNullOrWhiteSpace(downloadUrl)) return;
+
+                // 4. Baixa o novo executável para arquivo temporário
+                string exePath = Process.GetCurrentProcess().MainModule.FileName;
+                string exeDir  = Path.GetDirectoryName(exePath);
+                string tempPath = Path.Combine(exeDir, "ChecklistLogin_update.tmp");
+
+                DownloadFile(downloadUrl, tempPath);
+
+                // Valida se o download resultou num arquivo válido (> 10 KB)
+                if (!File.Exists(tempPath) || new FileInfo(tempPath).Length < 10240)
+                {
+                    try { File.Delete(tempPath); } catch { }
+                    return;
+                }
+
+                // 5. Troca atômica: renomeia o atual para .old e coloca o novo no lugar
+                //    No Windows um EXE em execução não pode ser sobrescrito, mas PODE ser renomeado.
+                string oldPath = exePath + ".old";
+                try { File.Delete(oldPath); } catch { }
+
+                File.Move(exePath, oldPath);   // exe_atual -> exe_atual.old
+                File.Move(tempPath, exePath);  // novo_tmp  -> exe_atual
+
+                // 6. Agenda relançamento do processo para aplicar atualização silenciosamente
+                //    O processo atual continua rodando normalmente até o próximo logon/reopen.
+            }
+            catch { /* Falhas são silenciosas — app continua funcionando sem interrupção */ }
+        }
+
+        private static string FetchJson(string url)
+        {
+            try
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                req.UserAgent = "ChecklistLogin-Updater/" + CurrentVersion;
+                req.Timeout   = 10000; // 10 segundos máximo
+                req.Accept    = "application/vnd.github.v3+json";
+
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                {
+                    return sr.ReadToEnd();
+                }
+            }
+            catch { return null; }
+        }
+
+        private static void DownloadFile(string url, string destination)
+        {
+            try
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                req.UserAgent = "ChecklistLogin-Updater/" + CurrentVersion;
+                req.Timeout   = 120000; // 2 minutos para download
+
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (Stream src  = resp.GetResponseStream())
+                using (FileStream dst = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    byte[] buf = new byte[81920];
+                    int read;
+                    while ((read = src.Read(buf, 0, buf.Length)) > 0)
+                        dst.Write(buf, 0, read);
+                }
+            }
+            catch
+            {
+                try { if (File.Exists(destination)) File.Delete(destination); } catch { }
+            }
+        }
+
+        // Localiza a URL de download do asset ChecklistLogin.exe dentro do JSON da release
+        private static string FindExeAssetUrl(string json)
+        {
+            // Procura pelo bloco de asset cujo name contém "ChecklistLogin.exe" ou similar
+            // Formato GitHub: "browser_download_url": "https://..."
+            MatchCollection blocks = Regex.Matches(json,
+                @"\{[^{}]*?\""name\"\s*:\s*\"([^\"]*ChecklistLogin[^\"]*\.exe)[^{}]*?\"browser_download_url\"\s*:\s*\"([^\"]+)\"[^{}]*?\}",
+                RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+            foreach (Match m in blocks)
+            {
+                if (m.Success) return m.Groups[2].Value;
+            }
+
+            // Fallback: busca qualquer browser_download_url que termine em .exe
+            Match fallback = Regex.Match(json,
+                @"\"browser_download_url\"\s*:\s*\"(https://[^\"]+\.exe)\"",
+                RegexOptions.IgnoreCase);
+            return fallback.Success ? fallback.Groups[1].Value : null;
+        }
+
+        private static string ExtractJsonString(string json, string key)
+        {
+            Match m = Regex.Match(json,
+                "\"" + key + "\"\\s*:\\s*\"([^\"]+)\"",
+                RegexOptions.IgnoreCase);
+            return m.Success ? m.Groups[1].Value : null;
+        }
+
+        // Retorna true se remoteVersion é estritamente maior que localVersion
+        private static bool IsNewerVersion(string remote, string local)
+        {
+            try
+            {
+                Version r = new Version(remote);
+                Version l = new Version(local);
+                return r > l;
+            }
+            catch { return false; }
+        }
+    }
+
+
     public class Program
     {
         private static Mutex _singleInstanceMutex;
@@ -24,6 +191,9 @@ namespace ChecklistLogin
         [STAThread]
         public static void Main(string[] args)
         {
+            // Limpa arquivos .old de atualizações anteriores (operação rápida, sem impacto)
+            AutoUpdater.CleanupOldFiles();
+
             try
             {
                 Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
@@ -37,7 +207,8 @@ namespace ChecklistLogin
                 if (arg0 == "--install" || arg0 == "/install")
                 {
                     string logDir = (args.Length > 1) ? args[1] : @"C:\Logs\Checklist";
-                    InstallTaskAndPermissions(logDir);
+                    string location = (args.Length > 2) ? args[2] : "PORTO";
+                    InstallTaskAndPermissions(logDir, location);
                     return;
                 }
                 else if (arg0 == "--uninstall" || arg0 == "/uninstall")
@@ -68,16 +239,50 @@ namespace ChecklistLogin
 
             EventWaitHandle showEventWaitHandle = new EventWaitHandle(false, EventResetMode.AutoReset, EventName);
 
+            // Dispara verificação de atualização em segundo plano — não bloqueia a UI
+            AutoUpdater.CheckAndUpdateAsync();
+
             // Launch WPF GUI App
             var app = new Application();
             var mainWindow = new MainWindow(showEventWaitHandle);
             app.Run(mainWindow);
         }
 
-        public static void InstallTaskAndPermissions(string logDir)
+        public static void SaveConfigFile(string logDir, string location)
         {
             try
             {
+                if (string.IsNullOrWhiteSpace(location)) location = "PORTO";
+                if (string.IsNullOrWhiteSpace(logDir)) logDir = @"C:\Logs\Checklist";
+
+                string json = "{\n" +
+                              "  \"logFolderPath\": \"" + logDir.Replace("\\", "\\\\") + "\",\n" +
+                              "  \"location\": \"" + location + "\",\n" +
+                              "  \"googleWebhookUrl\": \"https://script.google.com/macros/s/AKfycbyvVnnAmbv_zVtjBilNd8qu5S4LWfN_K6QZga-aE5j3UKs3NOmSBHn1SKjaCCOeSrpA/exec\"\n" +
+                              "}";
+
+                // Save in App base dir
+                string baseFile = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+                File.WriteAllText(baseFile, json, Encoding.UTF8);
+
+                // Save in ProgramData
+                string progDataDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ChecklistLogin");
+                if (!Directory.Exists(progDataDir)) Directory.CreateDirectory(progDataDir);
+                File.WriteAllText(System.IO.Path.Combine(progDataDir, "config.json"), json, Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("SaveConfigFile error: " + ex.Message);
+            }
+        }
+
+        public static void InstallTaskAndPermissions(string logDir, string location = "PORTO")
+        {
+            try
+            {
+                // 0. Grava/atualiza o arquivo de configuração config.json
+                SaveConfigFile(logDir, location);
+
                 // 1. Ensure log folder exists and grant Users write permissions natively in C#
                 if (!Directory.Exists(logDir))
                 {
@@ -100,6 +305,30 @@ namespace ChecklistLogin
                 catch (Exception ex)
                 {
                     Debug.WriteLine("ACL error: " + ex.Message);
+                }
+
+                // 1b. Conceder permissão de Modify na pasta do executável para que o auto-update
+                //     possa substituir o .exe sem necessitar de privilégios de Administrador
+                try
+                {
+                    string exeDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName);
+                    if (!string.IsNullOrWhiteSpace(exeDir) && Directory.Exists(exeDir))
+                    {
+                        DirectoryInfo appDirInfo = new DirectoryInfo(exeDir);
+                        DirectorySecurity appDirSec = appDirInfo.GetAccessControl();
+                        SecurityIdentifier users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+                        appDirSec.AddAccessRule(new FileSystemAccessRule(
+                            users,
+                            FileSystemRights.Modify,
+                            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                            PropagationFlags.None,
+                            AccessControlType.Allow));
+                        appDirInfo.SetAccessControl(appDirSec);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("AppDir ACL error: " + ex.Message);
                 }
 
                 // 2. Set HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run for All Users
@@ -244,34 +473,51 @@ namespace ChecklistLogin
     public class AppConfig
     {
         public string LogFolderPath { get; set; }
+        public string Location { get; set; }
 
         public AppConfig()
         {
             LogFolderPath = @"C:\Logs\Checklist";
+            Location = "PORTO";
         }
 
         public static AppConfig Load()
         {
+            var config = new AppConfig();
             try
             {
-                string configPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
-                if (File.Exists(configPath))
+                string baseDirConfig = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+                string commonConfig = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ChecklistLogin", "config.json");
+                string appDataConfig = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChecklistLogin", "config.json");
+
+                string configPath = null;
+                if (File.Exists(baseDirConfig)) configPath = baseDirConfig;
+                else if (File.Exists(commonConfig)) configPath = commonConfig;
+                else if (File.Exists(appDataConfig)) configPath = appDataConfig;
+
+                if (configPath != null)
                 {
                     string text = File.ReadAllText(configPath);
-                    Match m = Regex.Match(text, "\"logFolderPath\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
-                    if (m.Success)
+                    Match mPath = Regex.Match(text, "\"logFolderPath\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                    if (mPath.Success)
                     {
-                        string path = m.Groups[1].Value.Replace("\\\\", "\\");
+                        string path = mPath.Groups[1].Value.Replace("\\\\", "\\");
                         if (!string.IsNullOrWhiteSpace(path))
                         {
-                            return new AppConfig { LogFolderPath = path };
+                            config.LogFolderPath = path;
                         }
+                    }
+
+                    Match mLoc = Regex.Match(text, "\"location\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                    if (mLoc.Success && !string.IsNullOrWhiteSpace(mLoc.Groups[1].Value))
+                    {
+                        config.Location = mLoc.Groups[1].Value.Trim();
                     }
                 }
             }
             catch { }
 
-            return new AppConfig();
+            return config;
         }
     }
 
@@ -340,7 +586,8 @@ namespace ChecklistLogin
             if (e.Reason == SessionSwitchReason.ConsoleConnect ||
                 e.Reason == SessionSwitchReason.SessionUnlock ||
                 e.Reason == SessionSwitchReason.SessionLogon ||
-                e.Reason == SessionSwitchReason.RemoteConnect)
+                e.Reason == SessionSwitchReason.RemoteConnect ||
+                e.Reason == SessionSwitchReason.SessionLock)
             {
                 Application.Current?.Dispatcher?.Invoke(() => ReopenChecklist());
             }
@@ -348,6 +595,7 @@ namespace ChecklistLogin
 
         public void ReopenChecklist()
         {
+            _isExplicitShutdown = false;
             ResetForm();
             Show();
             WindowState = WindowState.Maximized;
@@ -357,14 +605,15 @@ namespace ChecklistLogin
 
         private void ResetForm()
         {
+            _isExplicitShutdown = false;
             foreach (var q in _questions)
             {
                 q.IsOk = null;
                 q.ProblemDescription = "";
                 if (q.DescTextBox != null) q.DescTextBox.Text = "";
                 if (q.DescPanel != null) q.DescPanel.Visibility = Visibility.Collapsed;
-                if (q.BtnSim != null) StyleButtonUnselected(q.BtnSim, "#ECFDF5", "#047857", "#A7F3D0");
-                if (q.BtnNao != null) StyleButtonUnselected(q.BtnNao, "#FEF2F2", "#B91C1C", "#FCA5A5");
+                if (q.BtnSim != null) StyleButtonUnselected(q.BtnSim, "#F0F9FF", "#0091D6", "#BAE6FD");
+                if (q.BtnNao != null) StyleButtonUnselected(q.BtnNao, "#FFF7ED", "#EF5E31", "#FFEDD5");
                 if (q.CardBorder != null) q.CardBorder.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E2E8F0"));
             }
             ValidateForm();
@@ -482,7 +731,7 @@ namespace ChecklistLogin
                 // Fallback visual de texto institucional SENAI
                 Border logoBlock = new Border
                 {
-                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#164194")),
+                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A4B9F")),
                     CornerRadius = new CornerRadius(12),
                     Padding = new Thickness(20, 8, 20, 8),
                     Margin = new Thickness(0, 0, 20, 0)
@@ -499,7 +748,7 @@ namespace ChecklistLogin
                 Border accentBar = new Border
                 {
                     Height = 3.5,
-                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E84910")),
+                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF5E31")),
                     CornerRadius = new CornerRadius(2),
                     Margin = new Thickness(0, 2, 0, 0)
                 };
@@ -517,7 +766,7 @@ namespace ChecklistLogin
                 Text = "SISTEMA DE VERIFICAÇÃO INSTITUCIONAL",
                 FontSize = 11,
                 FontWeight = FontWeights.Black,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#164194")),
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A4B9F")),
                 Margin = new Thickness(0, 0, 0, 2)
             };
             TextBlock mainTitle = new TextBlock
@@ -531,28 +780,31 @@ namespace ChecklistLogin
             titleStack.Children.Add(mainTitle);
             Grid.SetColumn(titleStack, 1);
 
-            // Metadata Badges (User, Machine & Progress)
+            // Metadata Badges (Location, User, Machine & Progress)
             StackPanel badgesPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             
+            // Location Badge
+            Border locationBadge = CreateBadge("📍 Local", _config.Location ?? "PORTO", "#EF5E31");
             // User Badge
-            Border userBadge = CreateBadge("👤 Usuário", Environment.UserName, "#164194");
+            Border userBadge = CreateBadge("👤 Usuário", Environment.UserName, "#1A4B9F");
             // Machine Badge
-            Border pcBadge = CreateBadge("💻 Computador", Environment.MachineName, "#43BDD9");
+            Border pcBadge = CreateBadge("💻 Computador", Environment.MachineName, "#0091D6");
 
             // Progress Badge
             Border progressBadge = new Border
             {
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#164194")),
+                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A4B9F")),
                 CornerRadius = new CornerRadius(14),
                 Padding = new Thickness(16, 8, 16, 8),
                 Margin = new Thickness(8, 0, 0, 0)
             };
             StackPanel progStack = new StackPanel();
             progStack.Children.Add(new TextBlock { Text = "PROGRESSO", FontSize = 9, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#93C5FD")) });
-            _progressText = new TextBlock { Text = "0 de 5 (0%)", FontSize = 13, FontWeight = FontWeights.Black, Foreground = Brushes.White };
+            _progressText = new TextBlock { Text = "0 de 0 (0%)", FontSize = 13, FontWeight = FontWeights.Black, Foreground = Brushes.White };
             progStack.Children.Add(_progressText);
             progressBadge.Child = progStack;
 
+            badgesPanel.Children.Add(locationBadge);
             badgesPanel.Children.Add(userBadge);
             badgesPanel.Children.Add(pcBadge);
             badgesPanel.Children.Add(progressBadge);
@@ -578,7 +830,7 @@ namespace ChecklistLogin
             };
             _progressBarFill = new Border
             {
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#164194")),
+                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A4B9F")),
                 Height = 6,
                 CornerRadius = new CornerRadius(3),
                 HorizontalAlignment = HorizontalAlignment.Left,
@@ -605,11 +857,22 @@ namespace ChecklistLogin
                 HorizontalAlignment = HorizontalAlignment.Center
             };
 
+            bool isNotebook = (_config.Location ?? "").ToUpperInvariant().Contains("NOTEBOOK");
+
             AddQuestion(cardsPanel, "tela", "Tela / Monitor com exibição perfeita?", "DISPLAY & IMAGEM");
             AddQuestion(cardsPanel, "teclado", "Teclado completo e com todas as teclas funcionando?", "PERIFÉRICOS DE ENTRADA");
-            AddQuestion(cardsPanel, "mouse", "Mouse óptico com cliques e scroll operacionais?", "PERIFÉRICOS DE ENTRADA");
-            AddQuestion(cardsPanel, "internet", "Conexão com a Internet / Rede SENAI ativa?", "CONECTIVIDADE");
-            AddQuestion(cardsPanel, "computador", "Gabinete / Computador liga sem ruídos ou lentidão?", "HARDWARE PRINCIPAL");
+
+            if (isNotebook)
+            {
+                AddQuestion(cardsPanel, "touchpad", "Touch Pad / Mouse com cliques e navegação operacionais?", "PERIFÉRICOS DE ENTRADA");
+                AddQuestion(cardsPanel, "internet", "Conexão com a Internet / Rede SENAI ativa?", "CONECTIVIDADE");
+            }
+            else
+            {
+                AddQuestion(cardsPanel, "mouse", "Mouse óptico com cliques e scroll operacionais?", "PERIFÉRICOS DE ENTRADA");
+                AddQuestion(cardsPanel, "internet", "Conexão com a Internet / Rede SENAI ativa?", "CONECTIVIDADE");
+                AddQuestion(cardsPanel, "computador", "Gabinete / Computador liga sem ruídos ou lentidão?", "HARDWARE PRINCIPAL");
+            }
 
             scrollViewer.Content = cardsPanel;
             Grid.SetRow(scrollViewer, 1);
@@ -641,7 +904,7 @@ namespace ChecklistLogin
             {
                 Text = "SENAI",
                 FontSize = 13,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#164194")),
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A4B9F")),
                 FontWeight = FontWeights.Black
             });
 
@@ -750,7 +1013,7 @@ namespace ChecklistLogin
                 Margin = new Thickness(0, 0, 6, 0),
                 Cursor = Cursors.Hand
             };
-            StyleButtonUnselected(q.BtnSim, "#ECFDF5", "#047857", "#A7F3D0");
+            StyleButtonUnselected(q.BtnSim, "#F0F9FF", "#0091D6", "#BAE6FD");
 
             q.BtnNao = new Button
             {
@@ -761,7 +1024,7 @@ namespace ChecklistLogin
                 Margin = new Thickness(6, 0, 0, 0),
                 Cursor = Cursors.Hand
             };
-            StyleButtonUnselected(q.BtnNao, "#FEF2F2", "#B91C1C", "#FCA5A5");
+            StyleButtonUnselected(q.BtnNao, "#FFF7ED", "#EF5E31", "#FFEDD5");
 
             Grid.SetColumn(q.BtnSim, 0);
             Grid.SetColumn(q.BtnNao, 1);
@@ -781,7 +1044,7 @@ namespace ChecklistLogin
                 Text = "Descreva detalhadamente o problema (Obrigatório):",
                 FontSize = 11,
                 FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF4444")),
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF5E31")),
                 Margin = new Thickness(0, 0, 0, 6)
             };
 
@@ -793,7 +1056,7 @@ namespace ChecklistLogin
                 Padding = new Thickness(10),
                 Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFFFFF")),
                 Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0F172A")),
-                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF4444")),
+                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF5E31")),
                 BorderThickness = new Thickness(1.5),
                 FontSize = 13
             };
@@ -812,9 +1075,9 @@ namespace ChecklistLogin
             q.BtnSim.Click += (s, e) =>
             {
                 q.IsOk = true;
-                StyleButtonSelected(q.BtnSim, "#10B981"); // Emerald Green SIM
-                StyleButtonUnselected(q.BtnNao, "#FEF2F2", "#B91C1C", "#FCA5A5");
-                q.CardBorder.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#10B981"));
+                StyleButtonSelected(q.BtnSim, "#0091D6"); // SENAI Cyan SIM
+                StyleButtonUnselected(q.BtnNao, "#FFF7ED", "#EF5E31", "#FFEDD5");
+                q.CardBorder.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0091D6"));
                 q.DescPanel.Visibility = Visibility.Collapsed;
                 ValidateForm();
             };
@@ -823,9 +1086,9 @@ namespace ChecklistLogin
             q.BtnNao.Click += (s, e) =>
             {
                 q.IsOk = false;
-                StyleButtonSelected(q.BtnNao, "#EF4444"); // Rose Red NÃO
-                StyleButtonUnselected(q.BtnSim, "#ECFDF5", "#047857", "#A7F3D0");
-                q.CardBorder.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF4444"));
+                StyleButtonSelected(q.BtnNao, "#EF5E31"); // SENAI Orange NÃO
+                StyleButtonUnselected(q.BtnSim, "#F0F9FF", "#0091D6", "#BAE6FD");
+                q.CardBorder.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF5E31"));
                 q.DescPanel.Visibility = Visibility.Visible;
                 ValidateForm();
             };
@@ -915,8 +1178,8 @@ namespace ChecklistLogin
                 LinearGradientBrush grad = new LinearGradientBrush();
                 grad.StartPoint = new Point(0, 0);
                 grad.EndPoint = new Point(1, 1);
-                grad.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#164194"), 0));
-                grad.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#2563EB"), 1));
+                grad.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#1A4B9F"), 0));
+                grad.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#0091D6"), 1));
                 borderFactory.SetValue(Border.BackgroundProperty, grad);
             }
             else
@@ -940,6 +1203,7 @@ namespace ChecklistLogin
         private void BtnSubmit_Click(object sender, RoutedEventArgs e)
         {
             SaveLog();
+            _isExplicitShutdown = true;
             Hide();
         }
 
@@ -950,30 +1214,67 @@ namespace ChecklistLogin
                 string machineName = Environment.MachineName;
                 string userName = Environment.UserName;
                 string fileName = machineName + ".txt";
+                string dataHora = DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss");
 
                 StringBuilder sb = new StringBuilder();
                 sb.AppendLine("=========================================");
                 sb.AppendLine("Computador: " + machineName);
                 sb.AppendLine("Usuário: " + userName);
-                sb.AppendLine("Data/Hora: " + DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"));
+                sb.AppendLine("Data/Hora: " + dataHora);
                 sb.AppendLine("-----------------------------------------");
+
+                List<string> statusList = new List<string>();
+
+                string statusTela = "OK";
+                string statusTeclado = "OK";
+                string statusMouse = "OK";
+                string statusTouchPad = "OK";
+                string statusInternet = "OK";
+                string statusGabinete = "OK";
+                bool temDefeito = false;
 
                 foreach (var q in _questions)
                 {
                     string name = q.Id.ToUpper();
+                    string id = (q.Id ?? "").ToLower();
+                    string val = "OK";
+
                     if (q.IsOk == true)
                     {
                         sb.AppendLine(name + ": OK");
+                        statusList.Add(name + ": OK");
                     }
                     else if (q.IsOk == false)
                     {
+                        temDefeito = true;
                         string desc = string.IsNullOrWhiteSpace(q.ProblemDescription) ? "Sem descrição" : q.ProblemDescription.Trim();
                         sb.AppendLine(name + ": NÃO OK - " + desc);
+                        val = "NÃO OK (" + desc + ")";
+                        statusList.Add(name + ": NO-OK (" + desc + ")");
                     }
+                    else
+                    {
+                        val = "PENDENTE";
+                        statusList.Add(name + ": PENDENTE");
+                    }
+
+                    if (id.Contains("tela") || id.Contains("monitor")) statusTela = val;
+                    else if (id.Contains("teclado")) statusTeclado = val;
+                    else if (id.Contains("touch")) statusTouchPad = val;
+                    else if (id.Contains("mouse")) statusMouse = val;
+                    else if (id.Contains("internet") || id.Contains("rede")) statusInternet = val;
+                    else if (id.Contains("gabinete") || id.Contains("computador")) statusGabinete = val;
                 }
 
                 sb.AppendLine("=========================================");
                 sb.AppendLine();
+
+                string statusGeral = temDefeito ? "ATENÇÃO / DEFEITO" : "OK";
+                string resumoItens = string.Join("; ", statusList);
+
+                // Dispara o log para a planilha online do Google em segundo plano
+                string location = _config?.Location ?? "PORTO";
+                SendToGoogleWebhook(location, machineName, userName, dataHora, statusTela, statusTeclado, statusMouse, statusTouchPad, statusInternet, statusGabinete, statusGeral, resumoItens);
 
                 string primaryFolder = _config.LogFolderPath;
                 if (TrySaveLogFile(primaryFolder, fileName, sb.ToString()))
@@ -996,6 +1297,49 @@ namespace ChecklistLogin
             {
                 MessageBox.Show("Erro ao gravar log: " + ex.Message, "Aviso", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
+        }
+
+        private void SendToGoogleWebhook(string location, string machineName, string userName, string dataHora, string tela, string teclado, string mouse, string touchPad, string internet, string gabinete, string statusGeral, string resumoItens)
+        {
+            try
+            {
+                string webhookUrl = "https://script.google.com/macros/s/AKfycbyvVnnAmbv_zVtjBilNd8qu5S4LWfN_K6QZga-aE5j3UKs3NOmSBHn1SKjaCCOeSrpA/exec";
+                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    try
+                    {
+                        using (var client = new System.Net.WebClient())
+                        {
+                            client.Headers[System.Net.HttpRequestHeader.ContentType] = "application/json";
+                            client.Encoding = Encoding.UTF8;
+                            string jsonPayload = string.Format(
+                                "{{\"location\":\"{0}\",\"aba\":\"{0}\",\"unidade\":\"{0}\",\"computador\":\"{1}\",\"usuario\":\"{2}\",\"dataHora\":\"{3}\",\"tela\":\"{4}\",\"teclado\":\"{5}\",\"mouse\":\"{6}\",\"touchpad\":\"{7}\",\"internet\":\"{8}\",\"gabinete\":\"{9}\",\"statusGeral\":\"{10}\",\"resumoItens\":\"{11}\"}}",
+                                EscapeJson(location),
+                                EscapeJson(machineName),
+                                EscapeJson(userName),
+                                EscapeJson(dataHora),
+                                EscapeJson(tela),
+                                EscapeJson(teclado),
+                                EscapeJson(mouse),
+                                EscapeJson(touchPad),
+                                EscapeJson(internet),
+                                EscapeJson(gabinete),
+                                EscapeJson(statusGeral),
+                                EscapeJson(resumoItens)
+                            );
+                            client.UploadString(webhookUrl, "POST", jsonPayload);
+                        }
+                    }
+                    catch { }
+                });
+            }
+            catch { }
+        }
+
+        private static string EscapeJson(string str)
+        {
+            if (string.IsNullOrEmpty(str)) return "";
+            return str.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", " ").Replace("\r", " ");
         }
 
         private bool TrySaveLogFile(string folderPath, string fileName, string content)
@@ -1022,9 +1366,20 @@ namespace ChecklistLogin
             if (!_isExplicitShutdown)
             {
                 e.Cancel = true;
-                Hide();
+                WindowState = WindowState.Maximized;
+                Topmost = true;
+                Activate();
+                MessageBox.Show(
+                    "Você precisa responder e concluir todo o checklist de equipamentos antes de fechar a aplicação.",
+                    "Atenção — SENAI",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning
+                );
             }
-            base.OnClosing(e);
+            else
+            {
+                base.OnClosing(e);
+            }
         }
     }
 

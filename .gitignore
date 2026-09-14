@@ -1,0 +1,18 @@
+# Dependências Node.js (recriadas com npm install)
+node_modules/
+
+# Build outputs
+dist/
+bin/
+
+# Arquivos temporários / sistema
+*.tmp
+*.old
+*.log
+.DS_Store
+Thumbs.db
+
+# Variáveis de ambiente
+.env
+.env.local
+.env.*.local
