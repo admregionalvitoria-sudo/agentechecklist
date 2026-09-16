@@ -285,7 +285,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.4.0";
+        public const string CurrentVersion = "2.4.1";
 
         // URL raw do arquivo version.txt no repositório GitHub
         private const string VersionUrl =
