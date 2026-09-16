@@ -16,6 +16,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Microsoft.Win32;
 
 [assembly: AssemblyVersion(ChecklistLogin.AutoUpdater.CurrentVersion + ".0")]
@@ -750,6 +751,7 @@ namespace ChecklistLogin
         private TextBlock _customTitle, _customSubtitle, _customNotice;
         private Image _customImage;
         private Border _customPanel;
+        private DispatcherTimer _appearanceTimer;
         private void ApplyAppearance() { ApplyModernAppearance(); }
         private AppConfig _config;
 
@@ -768,6 +770,25 @@ namespace ChecklistLogin
             ApplyAppearance();
             if (previewOnly) return;
             RemoteAppearance.Refresh(location, ApplyAppearance);
+
+            _appearanceTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(30)
+            };
+            _appearanceTimer.Tick += delegate
+            {
+                if (_isExplicitShutdown) return;
+                RemoteAppearance.Refresh(location, ApplyAppearance);
+            };
+            _appearanceTimer.Start();
+
+            Closed += delegate
+            {
+                if (_appearanceTimer != null)
+                {
+                    _appearanceTimer.Stop();
+                }
+            };
 
             // Escutar eventos de troca de sessão/logon do Windows
             try
