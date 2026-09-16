@@ -37,6 +37,9 @@ namespace ChecklistLogin
         public static Dictionary<string, string> Current = new Dictionary<string, string>();
         private static string _panelUrl = "https://log-acesso.vercel.app/api/appearance";
         private static string _cloudName = "j35zooeo";
+        private const string _firestoreProjectId = "gen-lang-client-0375839871";
+        private const string _firestoreDatabaseId = "ai-studio-remixlogexplorer-d706c4ad-7968-40a7-a99d-147b9ef38ec8";
+        private const string _firestoreApiKey = "AIzaSyBnRxbFj5TtT629moqu4pEhaB-c6dtj0Sk";
         public static void SetConfig(string panelUrl) { if (!string.IsNullOrWhiteSpace(panelUrl)) _panelUrl = panelUrl; }
         public static void SetConfig(string panelUrl, string cloudName)
         {
@@ -44,6 +47,59 @@ namespace ChecklistLogin
             if (!string.IsNullOrWhiteSpace(cloudName)) _cloudName = cloudName;
         }
         private static string CacheFile(string location) { return Path.Combine(CacheFolder, "appearance-" + Regex.Replace(location, "[^A-Za-z0-9]", "_") + ".json"); }
+        private static string FirestoreDocumentUrl(string scope)
+        {
+            return string.Format(
+                "https://firestore.googleapis.com/v1/projects/{0}/databases/{1}/documents/checklistAppearance/{2}?key={3}",
+                _firestoreProjectId,
+                _firestoreDatabaseId,
+                Uri.EscapeDataString(scope.Replace(" ", "_")),
+                _firestoreApiKey
+            );
+        }
+        private static bool TryFetchFirestoreAppearance(string scope, out string response)
+        {
+            response = null;
+
+            try
+            {
+                var request = (HttpWebRequest)WebRequest.Create(FirestoreDocumentUrl(scope));
+                request.Timeout = 15000;
+                request.ReadWriteTimeout = 15000;
+
+                using (var result = request.GetResponse())
+                using (var reader = new StreamReader(result.GetResponseStream()))
+                {
+                    var docJson = reader.ReadToEnd();
+                    if (string.IsNullOrWhiteSpace(docJson)) return false;
+
+                    var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(docJson);
+                    object fieldsObj;
+                    if (root != null && root.TryGetValue("fields", out fieldsObj) && fieldsObj is Dictionary<string, object>)
+                    {
+                        var fields = (Dictionary<string, object>)fieldsObj;
+                        object payloadObj;
+                        if (fields.TryGetValue("payload", out payloadObj) && payloadObj is Dictionary<string, object>)
+                        {
+                            var payloadField = (Dictionary<string, object>)payloadObj;
+                            object payloadValue;
+                            if (payloadField.TryGetValue("stringValue", out payloadValue) && payloadValue is string && !string.IsNullOrWhiteSpace((string)payloadValue))
+                            {
+                                response = (string)payloadValue;
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (WebException ex)
+            {
+                var result = ex.Response as HttpWebResponse;
+                if (result == null || result.StatusCode != HttpStatusCode.NotFound) throw;
+            }
+
+            return false;
+        }
         private static string CloudinaryConfigUrl(string scope)
         {
             if (string.IsNullOrWhiteSpace(_cloudName)) return null;
@@ -56,6 +112,11 @@ namespace ChecklistLogin
         private static bool TryFetchAppearance(string scope, out string response)
         {
             response = null;
+
+            if (TryFetchFirestoreAppearance(scope, out response))
+            {
+                return true;
+            }
 
             foreach (var url in new string[] { _panelUrl + "?scope=" + Uri.EscapeDataString(scope), CloudinaryConfigUrl(scope) })
             {
