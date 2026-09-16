@@ -87,6 +87,16 @@ namespace ChecklistLogin
             }
             if (data.ContainsKey("supportTitle") && data["supportTitle"].Length > 70) throw new Exception("Invalid support title");
             if (data.ContainsKey("qrImage") && data["qrImage"].Length > 100000) throw new Exception("Invalid QR image");
+            if (data.ContainsKey("appVersion") && !string.IsNullOrWhiteSpace(data["appVersion"])) {
+                if (!Regex.IsMatch(data["appVersion"].Trim(), @"^\d+(\.\d+){1,3}$")) throw new Exception("Invalid appVersion");
+            }
+            if (data.ContainsKey("exeUrl") && !string.IsNullOrWhiteSpace(data["exeUrl"])) {
+                Uri link;
+                if (data["exeUrl"].Length > 500 || (!Uri.TryCreate(data["exeUrl"], UriKind.Absolute, out link) || link.Scheme != "https")) throw new Exception("Invalid exeUrl");
+            }
+            if (data.ContainsKey("exeSha256") && !string.IsNullOrWhiteSpace(data["exeSha256"])) {
+                if (!Regex.IsMatch(data["exeSha256"].Trim(), "^[a-fA-F0-9]{64}$")) throw new Exception("Invalid exeSha256");
+            }
             if (data.ContainsKey("slides")) ValidateSlides(data["slides"]);
             return data;
         }
@@ -99,6 +109,25 @@ namespace ChecklistLogin
             return slides;
         }
         public static string Get(string key, string fallback) { string value; return Current.TryGetValue(key, out value) ? value : fallback; }
+        private static void CheckForExecutableUpdate(Dictionary<string, string> parsed)
+        {
+            try
+            {
+                string appVer, exeUrl, exeHash, restartStr;
+                if (parsed != null &&
+                    parsed.TryGetValue("appVersion", out appVer) && !string.IsNullOrWhiteSpace(appVer) &&
+                    parsed.TryGetValue("exeUrl", out exeUrl) && !string.IsNullOrWhiteSpace(exeUrl))
+                {
+                    parsed.TryGetValue("exeSha256", out exeHash);
+                    bool restart = parsed.TryGetValue("forceRestart", out restartStr) && (restartStr == "true" || restartStr == "True");
+                    AutoUpdater.CheckAndUpdateAsync(appVer, exeUrl, exeHash, restart);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("CheckForExecutableUpdate: " + ex.Message);
+            }
+        }
         public static bool TryPrime(string location)
         {
             try
@@ -125,6 +154,7 @@ namespace ChecklistLogin
                     if (File.Exists(CacheFile(location))) File.Replace(CacheFile(location) + ".tmp", CacheFile(location), null);
                     else File.Move(CacheFile(location) + ".tmp", CacheFile(location));
                     Current = parsed;
+                    CheckForExecutableUpdate(parsed);
                     return true;
                 }
             }
@@ -183,6 +213,7 @@ namespace ChecklistLogin
                         Application.Current.Dispatcher.Invoke(new Action(delegate { done(); }));
                         MediaCache.Cleanup();
                     }
+                    CheckForExecutableUpdate(parsed);
                 } catch (Exception ex) { Debug.WriteLine("Appearance: " + ex.Message); }
                 finally { Interlocked.Exchange(ref _refreshing, 0); }
             });
@@ -194,13 +225,15 @@ namespace ChecklistLogin
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
         public const string CurrentVersion = "2.4.2";
 
-        // URL raw do arquivo version.txt no repositório GitHub
+        // URL raw do arquivo version.txt no repositório GitHub (fallback)
         private const string VersionUrl =
             "https://raw.githubusercontent.com/admregionalvitoria-sudo/agentechecklist/main/version.txt";
 
-        // URL raw do executável ChecklistLogin.exe no repositório GitHub
+        // URL raw do executável ChecklistLogin.exe no repositório GitHub (fallback)
         private const string ExeUrl =
             "https://raw.githubusercontent.com/admregionalvitoria-sudo/agentechecklist/main/release/ChecklistLogin.exe";
+
+        private static int _updating = 0;
 
         // Limpa arquivos .old deixados por actualizações anteriores
         public static void CleanupOldFiles()
@@ -217,30 +250,53 @@ namespace ChecklistLogin
         }
 
         // Inicia a checagem em segundo plano — não bloqueia a thread principal
-        public static void CheckAndUpdateAsync()
+        public static void CheckAndUpdateAsync(string remoteVersion = null, string exeUrl = null, string expectedHash = null, bool forceRestart = false)
         {
-            ThreadPool.QueueUserWorkItem(_ => RunUpdateCheck());
+            if (Interlocked.Exchange(ref _updating, 1) != 0) return;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    RunUpdateCheck(remoteVersion, exeUrl, expectedHash, forceRestart);
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _updating, 0);
+                }
+            });
         }
 
-        private static void RunUpdateCheck()
+        private static void RunUpdateCheck(string targetVersion = null, string targetExeUrl = null, string targetHash = null, bool forceRestart = false)
         {
             try
             {
                 ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
-                // 1. Lê version.txt direto do repositório GitHub (sem autenticação)
-                string remoteVersion = FetchText(VersionUrl);
-                if (string.IsNullOrWhiteSpace(remoteVersion)) return;
+
+                string remoteVersion = targetVersion;
+                string exeUrl = targetExeUrl;
+                string expectedHash = targetHash;
+
+                // 1. Se não foi fornecida versão específica (ex: arranque antes de consultar API), tenta fallback GitHub
+                if (string.IsNullOrWhiteSpace(remoteVersion) || string.IsNullOrWhiteSpace(exeUrl))
+                {
+                    remoteVersion = FetchText(VersionUrl);
+                    if (string.IsNullOrWhiteSpace(remoteVersion)) return;
+                    remoteVersion = remoteVersion.Trim().TrimStart('v', 'V');
+                    exeUrl = ExeUrl;
+                    expectedHash = FetchText(ExeUrl + ".sha256");
+                }
+
                 remoteVersion = remoteVersion.Trim().TrimStart('v', 'V');
 
                 // 2. Compara com a versão local
                 if (!IsNewerVersion(remoteVersion, CurrentVersion)) return;
 
-                // 3. Baixa o novo ChecklistLogin.exe diretamente do repositório
+                // 3. Baixa o novo ChecklistLogin.exe
                 string exePath  = Process.GetCurrentProcess().MainModule.FileName;
                 string exeDir   = Path.GetDirectoryName(exePath);
                 string tempPath = Path.Combine(exeDir, "ChecklistLogin_update.tmp");
 
-                DownloadFile(ExeUrl, tempPath);
+                DownloadFile(exeUrl, tempPath);
 
                 // 4. Valida arquivo (> 10 KB)
                 if (!File.Exists(tempPath) || new FileInfo(tempPath).Length < 10240)
@@ -249,13 +305,16 @@ namespace ChecklistLogin
                     return;
                 }
 
-                string expectedHash = FetchText(ExeUrl + ".sha256");
-                if (!ValidateDownload(tempPath, expectedHash)) {
-                    try { File.Delete(tempPath); } catch { }
-                    return;
+                // 5. Valida SHA-256 se fornecido
+                if (!string.IsNullOrWhiteSpace(expectedHash))
+                {
+                    if (!ValidateDownload(tempPath, expectedHash)) {
+                        try { File.Delete(tempPath); } catch { }
+                        return;
+                    }
                 }
 
-                // 5. Troca atômica: renomeia atual para .old, coloca novo no lugar
+                // 6. Troca atômica: renomeia atual para .old, coloca novo no lugar
                 //    No Windows um EXE em execução não pode ser sobrescrito, mas PODE ser renomeado.
                 string oldPath = exePath + ".old";
                 try { File.Delete(oldPath); } catch { }
@@ -264,7 +323,22 @@ namespace ChecklistLogin
                 try { File.Move(tempPath, exePath); }
                 catch { if (!File.Exists(exePath)) File.Move(oldPath, exePath); throw; }
 
-                // Atualização aplicada — entrará em vigor no próximo logon/reinício do agente
+                // 7. Se forceRestart solicitado e app estiver em execução
+                if (forceRestart && Application.Current != null && Application.Current.Dispatcher != null)
+                {
+                    Application.Current.Dispatcher.Invoke(new Action(delegate
+                    {
+                        try
+                        {
+                            var mw = Application.Current.MainWindow as MainWindow;
+                            if (mw != null && mw.CanSafelyRestart())
+                            {
+                                mw.RestartWithNewBinary();
+                            }
+                        }
+                        catch { }
+                    }));
+                }
             }
             catch { /* Falhas são silenciosas — app continua funcionando normalmente */ }
         }
@@ -839,6 +913,28 @@ namespace ChecklistLogin
                 if (q.CardBorder != null) q.CardBorder.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E2E8F0"));
             }
             ValidateForm();
+        }
+
+        public bool CanSafelyRestart()
+        {
+            if (_questions == null || _questions.Count == 0) return true;
+            foreach (var q in _questions)
+            {
+                if (q.IsOk != null) return false;
+            }
+            return true;
+        }
+
+        public void RestartWithNewBinary()
+        {
+            try
+            {
+                _isExplicitShutdown = true;
+                string exePath = Process.GetCurrentProcess().MainModule.FileName;
+                Process.Start(exePath);
+                Application.Current.Shutdown();
+            }
+            catch { }
         }
 
         private void InitUI() { InitModernUi(); }
