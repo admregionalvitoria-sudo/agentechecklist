@@ -130,6 +130,42 @@ namespace ChecklistLogin
             return slides;
         }
         public static string Get(string key, string fallback) { string value; return Current.TryGetValue(key, out value) ? value : fallback; }
+        public static bool TryPrime(string location)
+        {
+            try
+            {
+                ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
+
+                string response;
+                foreach (string scope in new string[] { location, "global" })
+                {
+                    if (!TryFetchAppearance(scope, out response)) continue;
+
+                    string payload = response;
+                    try {
+                        var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(response);
+                        object wrappedPayload;
+                        if (root != null && root.TryGetValue("payload", out wrappedPayload) && wrappedPayload is string) {
+                            payload = (string)wrappedPayload;
+                        }
+                    } catch { }
+
+                    var parsed = Parse(payload);
+                    Directory.CreateDirectory(CacheFolder);
+                    File.WriteAllText(CacheFile(location) + ".tmp", payload);
+                    if (File.Exists(CacheFile(location))) File.Replace(CacheFile(location) + ".tmp", CacheFile(location), null);
+                    else File.Move(CacheFile(location) + ".tmp", CacheFile(location));
+                    Current = parsed;
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Appearance prime: " + ex.Message);
+            }
+
+            return false;
+        }
         public static void LoadCache(string location)
         {
             try { Current = Parse(File.ReadAllText(CacheFile(location))); } catch { Current = new Dictionary<string, string>(); }
@@ -723,11 +759,15 @@ namespace ChecklistLogin
             if (previewOnly && previewLocation != null) _config.Location = previewLocation;
             // Propaga panelUrl e cloudName lidos do config.json para os módulos estáticos
             RemoteAppearance.SetConfig(_config.PanelUrl, _config.CloudName);
-            RemoteAppearance.LoadCache(_config.Location ?? "PORTO");
+            var location = _config.Location ?? "PORTO";
+            if (!RemoteAppearance.TryPrime(location))
+            {
+                RemoteAppearance.LoadCache(location);
+            }
             InitUI();
             ApplyAppearance();
             if (previewOnly) return;
-            RemoteAppearance.Refresh(_config.Location ?? "PORTO", ApplyAppearance);
+            RemoteAppearance.Refresh(location, ApplyAppearance);
 
             // Escutar eventos de troca de sessão/logon do Windows
             try
