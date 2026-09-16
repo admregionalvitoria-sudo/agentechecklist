@@ -168,17 +168,17 @@ namespace ChecklistLogin
                     Application.Current.Dispatcher.Invoke(new Action(delegate { Current = parsed; done(); }));
                     string image;
                     if (parsed.TryGetValue("image", out image)) {
-                        try { MediaCache.Download(new AnnouncementSlide { image = image, kind = "image", title = "", seconds = 10 }, true); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
+                        try { MediaCache.Download(new AnnouncementSlide { image = image, kind = "image", title = "", seconds = 10 }, false); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
                     }
                     string qrImage;
                     if (parsed.TryGetValue("qrImage", out qrImage)) {
-                        try { MediaCache.Download(new AnnouncementSlide { image = qrImage, kind = "image", title = "", seconds = 10 }, true); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
+                        try { MediaCache.Download(new AnnouncementSlide { image = qrImage, kind = "image", title = "", seconds = 10 }, false); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
                     }
                     string slides;
                     if (parsed.TryGetValue("slides", out slides)) {
                         var media = ValidateSlides(slides);
                         foreach (var slide in media) {
-                            try { MediaCache.Download(slide, true); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
+                            try { MediaCache.Download(slide, false); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
                         }
                         Application.Current.Dispatcher.Invoke(new Action(delegate { done(); }));
                         MediaCache.Cleanup();
@@ -192,7 +192,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.4.1";
+        public const string CurrentVersion = "2.4.2";
 
         // URL raw do arquivo version.txt no repositório GitHub
         private const string VersionUrl =
@@ -720,8 +720,17 @@ namespace ChecklistLogin
         private Image _customImage;
         private Border _customPanel;
         private DispatcherTimer _appearanceTimer;
+        private DateTime _lastAppearanceRefreshUtc = DateTime.MinValue;
         private void ApplyAppearance() { ApplyModernAppearance(); }
         private AppConfig _config;
+
+        // Atualiza a aparência remotamente, no máximo uma vez a cada 15 segundos.
+        private void RefreshAppearanceIfDue(string location)
+        {
+            if ((DateTime.UtcNow - _lastAppearanceRefreshUtc).TotalSeconds < 15) return;
+            _lastAppearanceRefreshUtc = DateTime.UtcNow;
+            RemoteAppearance.Refresh(location, ApplyAppearance);
+        }
 
         public MainWindow(EventWaitHandle showEventWaitHandle, bool previewOnly = false, string previewLocation = null)
         {
@@ -745,10 +754,18 @@ namespace ChecklistLogin
             };
             _appearanceTimer.Tick += delegate
             {
-                if (_isExplicitShutdown) return;
-                RemoteAppearance.Refresh(location, ApplyAppearance);
+                // Mantém o cache sempre atualizado mesmo com a janela oculta,
+                // para que a abertura seguinte já mostre o conteúdo publicado.
+                RefreshAppearanceIfDue(location);
             };
             _appearanceTimer.Start();
+
+            // Ao ganhar foco (reabertura/sessão), busca imediatamente a aparência.
+            Activated += delegate
+            {
+                if (_isExplicitShutdown) return;
+                RefreshAppearanceIfDue(location);
+            };
 
             Closed += delegate
             {
@@ -801,7 +818,7 @@ namespace ChecklistLogin
         {
             _isExplicitShutdown = false;
             ResetForm();
-            RemoteAppearance.Refresh(_config.Location ?? "PORTO", ApplyAppearance);
+            RefreshAppearanceIfDue(_config.Location ?? "PORTO");
             Show();
             WindowState = WindowState.Maximized;
             Activate();
