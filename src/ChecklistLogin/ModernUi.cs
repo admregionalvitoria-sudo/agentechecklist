@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Windows;
@@ -26,21 +26,29 @@ namespace ChecklistLogin
     public static class MediaCache
     {
         private static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChecklistLogin", "media");
+        // Cloud names aceitos: j35zooeo (novo padrão) e donpjw2ed (legado)
+        private static readonly string[] AllowedCloudNames = new[] { "j35zooeo", "donpjw2ed" };
         public static bool IsAllowed(string value, string kind) {
             Uri uri;
             string type = kind == "video" ? "video" : "image";
-            return value != null && value.Length <= 2000 && Uri.TryCreate(value, UriKind.Absolute, out uri) && uri.Scheme == "https" && uri.Host == "res.cloudinary.com" && uri.IsDefaultPort && uri.UserInfo == "" && uri.Query == "" && uri.Fragment == "" && uri.AbsolutePath.StartsWith("/donpjw2ed/" + type + "/upload/", StringComparison.Ordinal) && Regex.IsMatch(uri.AbsolutePath, type == "video" ? @"\.mp4$" : @"\.(png|jpe?g|webp)$", RegexOptions.IgnoreCase);
+            if (value == null || value.Length > 2000 || !Uri.TryCreate(value, UriKind.Absolute, out uri)) return false;
+            if (uri.Scheme != "https" || uri.Host != "res.cloudinary.com" || !uri.IsDefaultPort || uri.UserInfo != "" || uri.Query != "" || uri.Fragment != "") return false;
+            foreach (var cloud in AllowedCloudNames) {
+                if (uri.AbsolutePath.StartsWith("/" + cloud + "/" + type + "/upload/", StringComparison.Ordinal) &&
+                    Regex.IsMatch(uri.AbsolutePath, type == "video" ? @"\.mp4$" : @"\.(png|jpe?g|webp)$", RegexOptions.IgnoreCase)) return true;
+            }
+            return false;
         }
         public static string FileFor(string url) {
             using (var hash = SHA256.Create()) return Path.Combine(Folder, BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(url))).Replace("-", "") + (url.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ? ".mp4" : ".jpg"));
         }
-        public static void Download(AnnouncementSlide slide) {
+        public static void Download(AnnouncementSlide slide, bool overwriteExisting = false) {
             if (!IsAllowed(slide.image, slide.kind)) return;
             string target = FileFor(slide.image);
-            if (File.Exists(target)) { File.SetLastWriteTimeUtc(target, DateTime.UtcNow); return; }
             Directory.CreateDirectory(Folder);
             string temporary = target + ".tmp";
             try {
+            if (File.Exists(target) && !overwriteExisting) { File.SetLastWriteTimeUtc(target, DateTime.UtcNow); return; }
                 var request = (HttpWebRequest)WebRequest.Create(slide.image);
                 request.Timeout = 45000; request.ReadWriteTimeout = 10000; request.AllowAutoRedirect = false;
                 long limit = (slide.kind == "video" ? 60L : 10L) * 1024 * 1024;
@@ -58,7 +66,8 @@ namespace ChecklistLogin
                         if (total == 0) throw new Exception("Empty media");
                     }
                 }
-                File.Move(temporary, target);
+                if (File.Exists(target)) File.Replace(temporary, target, null);
+                else File.Move(temporary, target);
             } finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
         public static void Cleanup() {
@@ -95,19 +104,33 @@ namespace ChecklistLogin
         }
         private BitmapSource DecodePicture(string data)
         {
+            if (string.IsNullOrEmpty(data)) return null;
             if (MediaCache.IsAllowed(data, "image")) {
                 string cached = MediaCache.FileFor(data);
-                if (!File.Exists(cached)) return null;
-                using (var file = File.OpenRead(cached)) {
-                    var image = new BitmapImage(); image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad; image.DecodePixelWidth = 1400;
-                    image.StreamSource = file; image.EndInit(); image.Freeze(); return image;
+                if (!File.Exists(cached)) {
+                    // Imagem ainda não cacheada: tenta baixar de forma síncrona e rápida
+                    try { MediaCache.Download(new AnnouncementSlide { image = data, kind = "image", title = "", seconds = 10 }); } catch { }
                 }
+                if (File.Exists(cached)) {
+                    try {
+                        using (var file = File.OpenRead(cached)) {
+                            var image = new BitmapImage(); image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad; image.DecodePixelWidth = 1400;
+                            image.StreamSource = file; image.EndInit(); image.Freeze(); return image;
+                        }
+                    } catch { }
+                }
+                // Cache falhou: tenta carregar direto da URL
+                try {
+                    var bi = new BitmapImage(); bi.BeginInit(); bi.UriSource = new Uri(data); bi.CacheOption = BitmapCacheOption.OnLoad; bi.DecodePixelWidth = 1400; bi.EndInit(); bi.Freeze(); return bi;
+                } catch { return null; }
             }
-            if (string.IsNullOrEmpty(data) || (!data.StartsWith("data:image/png;base64,") && !data.StartsWith("data:image/jpeg;base64,"))) return null;
-            using (var stream = new MemoryStream(Convert.FromBase64String(data.Substring(data.IndexOf(',') + 1)))) {
-                var bitmap = new BitmapImage(); bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.DecodePixelWidth = 1400; bitmap.StreamSource = stream; bitmap.EndInit(); bitmap.Freeze(); return bitmap;
-            }
+            if (!data.StartsWith("data:image/png;base64,") && !data.StartsWith("data:image/jpeg;base64,") && !data.StartsWith("data:image/webp;base64,")) return null;
+            try {
+                using (var stream = new MemoryStream(Convert.FromBase64String(data.Substring(data.IndexOf(',') + 1)))) {
+                    var bitmap = new BitmapImage(); bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                    bitmap.DecodePixelWidth = 1400; bitmap.StreamSource = stream; bitmap.EndInit(); bitmap.Freeze(); return bitmap;
+                }
+            } catch { return null; }
         }
         private BitmapSource ResourcePicture(string name)
         {

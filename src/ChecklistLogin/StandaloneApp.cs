@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Web.Script.Serialization;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -34,7 +34,75 @@ namespace ChecklistLogin
         private const string Endpoint = "https://log-acesso.vercel.app/api/appearance?scope=";
         private static int _refreshing;
         public static Dictionary<string, string> Current = new Dictionary<string, string>();
+        private static string _panelUrl = "https://log-acesso.vercel.app/api/appearance";
+        private static string _cloudName = "j35zooeo";
+        public static void SetConfig(string panelUrl) { if (!string.IsNullOrWhiteSpace(panelUrl)) _panelUrl = panelUrl; }
+        public static void SetConfig(string panelUrl, string cloudName)
+        {
+            SetConfig(panelUrl);
+            if (!string.IsNullOrWhiteSpace(cloudName)) _cloudName = cloudName;
+        }
         private static string CacheFile(string location) { return Path.Combine(CacheFolder, "appearance-" + Regex.Replace(location, "[^A-Za-z0-9]", "_") + ".json"); }
+        private static string CloudinaryConfigUrl(string scope)
+        {
+            if (string.IsNullOrWhiteSpace(_cloudName)) return null;
+            return string.Format(
+                "https://res.cloudinary.com/{0}/raw/upload/checklist/config/{1}.json",
+                _cloudName,
+                scope.Replace(" ", "_")
+            );
+        }
+        private static bool TryFetchAppearance(string scope, out string response)
+        {
+            response = null;
+
+            foreach (var url in new string[] { _panelUrl + "?scope=" + Uri.EscapeDataString(scope), CloudinaryConfigUrl(scope) })
+            {
+                if (string.IsNullOrWhiteSpace(url)) continue;
+
+                try
+                {
+                    var request = (HttpWebRequest)WebRequest.Create(url);
+                    request.Timeout = 15000; request.ReadWriteTimeout = 15000;
+                    using (var result = request.GetResponse())
+                    using (var reader = new StreamReader(result.GetResponseStream()))
+                    {
+                        char[] buffer = new char[1200001]; int total = 0, count;
+                        while (total < buffer.Length && (count = reader.Read(buffer, total, buffer.Length - total)) > 0) total += count;
+                        if (total > 1200000) throw new Exception("Response too large");
+                        response = new string(buffer, 0, total);
+                    }
+
+                    try
+                    {
+                        var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(response);
+                        object wrappedPayload;
+                        if (root != null && root.TryGetValue("payload", out wrappedPayload) && wrappedPayload is string)
+                        {
+                            return true;
+                        }
+                    }
+                    catch { }
+
+                    try
+                    {
+                        Parse(response);
+                        return true;
+                    }
+                    catch
+                    {
+                        response = null;
+                    }
+                }
+                catch (WebException ex)
+                {
+                    var result = ex.Response as HttpWebResponse;
+                    if (result == null || result.StatusCode != HttpStatusCode.NotFound) throw;
+                }
+            }
+
+            return false;
+        }
         private static Dictionary<string, string> Parse(string payload)
         {
             if (payload == null || System.Text.Encoding.UTF8.GetByteCount(payload) > 900000) throw new Exception("Appearance too large");
@@ -57,7 +125,7 @@ namespace ChecklistLogin
             var slides = new JavaScriptSerializer().Deserialize<List<AnnouncementSlide>>(json);
             if (slides == null || slides.Count > 6) throw new Exception("Invalid slides");
             foreach (var slide in slides) {
-                if (slide == null || slide.image == null || slide.image.Length > 280000 || (!string.IsNullOrEmpty(slide.kind) && slide.kind != "image" && slide.kind != "video") || (!MediaCache.IsAllowed(slide.image, slide.kind) && !(slide.kind != "video" && (slide.image.StartsWith("data:image/jpeg;base64,") || slide.image.StartsWith("data:image/png;base64,")))) || slide.title == null || slide.title.Length > 100 || slide.seconds < 5 || slide.seconds > 60) throw new Exception("Invalid slide");
+                if (slide == null || slide.image == null || slide.image.Length > 280000 || (!string.IsNullOrEmpty(slide.kind) && slide.kind != "image" && slide.kind != "video") || (!MediaCache.IsAllowed(slide.image, slide.kind) && !(slide.kind != "video" && (slide.image.StartsWith("data:image/jpeg;base64,") || slide.image.StartsWith("data:image/png;base64,") || slide.image.StartsWith("data:image/webp;base64,")))) || slide.title == null || slide.title.Length > 100 || slide.seconds < 5 || slide.seconds > 60) throw new Exception("Invalid slide");
             }
             return slides;
         }
@@ -74,36 +142,38 @@ namespace ChecklistLogin
                     ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
                     string response = null;
                     foreach (string scope in new string[] { location, "global" }) {
-                        try {
-                            var request = (HttpWebRequest)WebRequest.Create(Endpoint + Uri.EscapeDataString(scope));
-                            request.Timeout = 15000; request.ReadWriteTimeout = 15000;
-                            using (var result = request.GetResponse())
-                            using (var reader = new StreamReader(result.GetResponseStream())) {
-                                char[] buffer = new char[1200001]; int total = 0, count;
-                                while (total < buffer.Length && (count = reader.Read(buffer, total, buffer.Length - total)) > 0) total += count;
-                                if (total > 1200000) throw new Exception("Response too large");
-                                response = new string(buffer, 0, total);
-                            }
+                        if (TryFetchAppearance(scope, out response)) {
                             break;
-                        } catch (WebException ex) {
-                            var result = ex.Response as HttpWebResponse;
-                            if (result == null || result.StatusCode != HttpStatusCode.NotFound) throw;
                         }
                     }
                     if (response == null) return;
-                    var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(response);
-                    string payload = (string)root["payload"];
+                    string payload = response;
+                    try {
+                        var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(response);
+                        object wrappedPayload;
+                        if (root != null && root.TryGetValue("payload", out wrappedPayload) && wrappedPayload is string) {
+                            payload = (string)wrappedPayload;
+                        }
+                    } catch { }
                     var parsed = Parse(payload);
                     Directory.CreateDirectory(CacheFolder);
                     File.WriteAllText(CacheFile(location) + ".tmp", payload);
                     if (File.Exists(CacheFile(location))) File.Replace(CacheFile(location) + ".tmp", CacheFile(location), null);
                     else File.Move(CacheFile(location) + ".tmp", CacheFile(location));
                     Application.Current.Dispatcher.Invoke(new Action(delegate { Current = parsed; done(); }));
+                    string image;
+                    if (parsed.TryGetValue("image", out image)) {
+                        try { MediaCache.Download(new AnnouncementSlide { image = image, kind = "image", title = "", seconds = 10 }, true); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
+                    }
+                    string qrImage;
+                    if (parsed.TryGetValue("qrImage", out qrImage)) {
+                        try { MediaCache.Download(new AnnouncementSlide { image = qrImage, kind = "image", title = "", seconds = 10 }, true); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
+                    }
                     string slides;
                     if (parsed.TryGetValue("slides", out slides)) {
                         var media = ValidateSlides(slides);
                         foreach (var slide in media) {
-                            try { MediaCache.Download(slide); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
+                            try { MediaCache.Download(slide, true); } catch (Exception ex) { Debug.WriteLine("Media: " + ex.Message); }
                         }
                         Application.Current.Dispatcher.Invoke(new Action(delegate { done(); }));
                         MediaCache.Cleanup();
@@ -117,7 +187,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.3.0";
+        public const string CurrentVersion = "2.4.0";
 
         // URL raw do arquivo version.txt no repositório GitHub
         private const string VersionUrl =
@@ -553,11 +623,17 @@ namespace ChecklistLogin
     {
         public string LogFolderPath { get; set; }
         public string Location { get; set; }
+        public string CloudName { get; set; }
+        public string UploadPreset { get; set; }
+        public string PanelUrl { get; set; }
 
         public AppConfig()
         {
             LogFolderPath = @"C:\Logs\Checklist";
             Location = "PORTO";
+            CloudName = "j35zooeo";
+            UploadPreset = "ml_default";
+            PanelUrl = "https://log-acesso.vercel.app/api/appearance";
         }
 
         public static AppConfig Load()
@@ -581,17 +657,20 @@ namespace ChecklistLogin
                     if (mPath.Success)
                     {
                         string path = mPath.Groups[1].Value.Replace("\\\\", "\\");
-                        if (!string.IsNullOrWhiteSpace(path))
-                        {
-                            config.LogFolderPath = path;
-                        }
+                        if (!string.IsNullOrWhiteSpace(path)) config.LogFolderPath = path;
                     }
 
                     Match mLoc = Regex.Match(text, "\"location\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
-                    if (mLoc.Success && !string.IsNullOrWhiteSpace(mLoc.Groups[1].Value))
-                    {
-                        config.Location = mLoc.Groups[1].Value.Trim();
-                    }
+                    if (mLoc.Success && !string.IsNullOrWhiteSpace(mLoc.Groups[1].Value)) config.Location = mLoc.Groups[1].Value.Trim();
+
+                    Match mCloud = Regex.Match(text, "\"cloudName\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                    if (mCloud.Success && !string.IsNullOrWhiteSpace(mCloud.Groups[1].Value)) config.CloudName = mCloud.Groups[1].Value.Trim();
+
+                    Match mPreset = Regex.Match(text, "\"uploadPreset\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                    if (mPreset.Success && !string.IsNullOrWhiteSpace(mPreset.Groups[1].Value)) config.UploadPreset = mPreset.Groups[1].Value.Trim();
+
+                    Match mPanel = Regex.Match(text, "\"panelUrl\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                    if (mPanel.Success && !string.IsNullOrWhiteSpace(mPanel.Groups[1].Value)) config.PanelUrl = mPanel.Groups[1].Value.Trim();
                 }
             }
             catch { }
@@ -642,6 +721,8 @@ namespace ChecklistLogin
         {
             _config = AppConfig.Load();
             if (previewOnly && previewLocation != null) _config.Location = previewLocation;
+            // Propaga panelUrl e cloudName lidos do config.json para os módulos estáticos
+            RemoteAppearance.SetConfig(_config.PanelUrl, _config.CloudName);
             RemoteAppearance.LoadCache(_config.Location ?? "PORTO");
             InitUI();
             ApplyAppearance();

@@ -11,7 +11,14 @@ $CscPath = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 if (-not (Test-Path $CscPath)) {
     $CscPath = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\Roslyn\csc.exe"
 }
-$IsccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+$IsccCandidates = @(
+    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+    "C:\Program Files\Inno Setup 6\ISCC.exe",
+    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+    "$env:LOCALAPPDATA\Programs\Antigravity IDE\resources\app\node_modules\innosetup\bin\ISCC.exe",
+    "$env:LOCALAPPDATA\Programs\Antigravity IDE\_\resources\app\node_modules\innosetup\bin\ISCC.exe"
+)
+$IsccPath = $IsccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 $SourceCs = "$PSScriptRoot\src\ChecklistLogin\StandaloneApp.cs"
 $BinDir = "$PSScriptRoot\bin"
 $TargetExe = "$BinDir\ChecklistLogin.exe"

@@ -1,6 +1,6 @@
-﻿; Inno Setup Script - Instalador Único do Agente de Checklist SENAI
+; Inno Setup Script - Instalador Único do Agente de Checklist SENAI
 #define MyAppName "Agente de Checklist SENAI"
-#define MyAppVersion "2.3.0"
+#define MyAppVersion "2.4.0"
 #define MyAppPublisher "SENAI - Serviço Nacional de Aprendizagem Industrial"
 #define MyAppExeName "ChecklistLogin.exe"
 
@@ -10,8 +10,10 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\ChecklistLogin
+DisableDirPage=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
+UsePreviousAppDir=no
 
 ; Garantir encerramento automático de instâncias em execução da aplicação
 CloseApplications=yes
@@ -74,7 +76,7 @@ end;
 procedure InitializeWizard;
 begin
   LocationPage := CreateInputOptionPage(
-    wpSelectDir,
+    wpWelcome,
     'Selecione a Unidade / Local de Instalação',
     'Para qual local ou dispositivo este checklist está sendo instalado?',
     'Selecione a opção desejada para direcionar os registros de acesso para a aba correspondente da planilha online:',
@@ -139,6 +141,9 @@ begin
     ConfigContent := '{' + #13#10 +
                      '  "logFolderPath": "' + EscapedPath + '",' + #13#10 +
                      '  "location": "' + SelectedLoc + '",' + #13#10 +
+                     '  "cloudName": "j35zooeo",' + #13#10 +
+                     '  "uploadPreset": "ml_default",' + #13#10 +
+                     '  "panelUrl": "https://log-acesso.vercel.app/api/appearance",' + #13#10 +
                      '  "googleWebhookUrl": "https://script.google.com/macros/s/AKfycbyvVnnAmbv_zVtjBilNd8qu5S4LWfN_K6QZga-aE5j3UKs3NOmSBHn1SKjaCCOeSrpA/exec"' + #13#10 +
                      '}';
 
