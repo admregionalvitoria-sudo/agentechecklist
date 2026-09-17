@@ -44,9 +44,11 @@ namespace ChecklistLogin
 
             try
             {
-                var request = (HttpWebRequest)WebRequest.Create(_panelUrl + "?scope=" + Uri.EscapeDataString(scope));
-                request.Timeout = 15000;
-                request.ReadWriteTimeout = 15000;
+                var request = (HttpWebRequest)WebRequest.Create(_panelUrl + "?scope=" + Uri.EscapeDataString(scope) + "&_t=" + DateTime.UtcNow.Ticks);
+                request.Timeout = 10000;
+                request.ReadWriteTimeout = 10000;
+                request.Headers[HttpRequestHeader.CacheControl] = "no-cache";
+                request.Headers[HttpRequestHeader.Pragma] = "no-cache";
 
                 using (var result = request.GetResponse())
                 using (var reader = new StreamReader(result.GetResponseStream()))
@@ -190,6 +192,18 @@ namespace ChecklistLogin
                             payload = (string)wrappedPayload;
                         }
                     } catch { }
+                    string cacheFilePath = CacheFile(location);
+                    if (File.Exists(cacheFilePath))
+                    {
+                        try {
+                            string existing = File.ReadAllText(cacheFilePath);
+                            if (string.Equals(existing, payload, StringComparison.Ordinal))
+                            {
+                                return;
+                            }
+                        } catch { }
+                    }
+
                     var parsed = Parse(payload);
                     Directory.CreateDirectory(CacheFolder);
                     File.WriteAllText(CacheFile(location) + ".tmp", payload);
@@ -223,7 +237,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.4.3";
+        public const string CurrentVersion = "2.4.4";
 
         // URL raw do arquivo version.txt no repositório GitHub (fallback)
         private const string VersionUrl =
@@ -798,10 +812,10 @@ namespace ChecklistLogin
         private void ApplyAppearance() { ApplyModernAppearance(); }
         private AppConfig _config;
 
-        // Atualiza a aparência remotamente, no máximo uma vez a cada 15 segundos.
+        // Atualiza a aparência remotamente com taxa reduzida para tempo real.
         private void RefreshAppearanceIfDue(string location)
         {
-            if ((DateTime.UtcNow - _lastAppearanceRefreshUtc).TotalSeconds < 15) return;
+            if ((DateTime.UtcNow - _lastAppearanceRefreshUtc).TotalSeconds < 3) return;
             _lastAppearanceRefreshUtc = DateTime.UtcNow;
             RemoteAppearance.Refresh(location, ApplyAppearance);
         }
@@ -824,12 +838,11 @@ namespace ChecklistLogin
 
             _appearanceTimer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromSeconds(30)
+                Interval = TimeSpan.FromSeconds(5)
             };
             _appearanceTimer.Tick += delegate
             {
-                // Mantém o cache sempre atualizado mesmo com a janela oculta,
-                // para que a abertura seguinte já mostre o conteúdo publicado.
+                // Mantém o cache sempre atualizado em tempo real (a cada 5s)
                 RefreshAppearanceIfDue(location);
             };
             _appearanceTimer.Start();
