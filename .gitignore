@@ -4,6 +4,7 @@ node_modules/
 # Build outputs
 dist/
 bin/
+obj/
 
 # Pasta de release NÃO é ignorada — o exe fica aqui para o auto-update
 # release/   <-- rastreada pelo git intencionalmente
