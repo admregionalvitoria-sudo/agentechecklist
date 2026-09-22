@@ -481,50 +481,6 @@ try {
         }
 
 
-        $registry = `
-            [Microsoft.Win32.RegistryKey]::OpenBaseKey(
-                [Microsoft.Win32.RegistryHive]::LocalMachine,
-                [Microsoft.Win32.RegistryView]::Registry64
-            )
-
-
-        $runKey = $registry.OpenSubKey(
-            'SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
-        )
-
-
-        try {
-
-            $runValue = $null
-
-            if ($runKey) {
-                $runValue = $runKey.GetValue(
-                    'ChecklistLogin'
-                )
-            }
-
-
-            if (
-                $null -eq $runValue `
-                -or `
-                $runValue.Trim('"') -ne $exePath
-            ) {
-                throw (
-                    'Inicializacao no Windows nao foi registrada.'
-                )
-            }
-
-        }
-        finally {
-
-            if ($runKey) {
-                $runKey.Dispose()
-            }
-
-            $registry.Dispose()
-        }
-
-
         #
         # VALIDACAO DE PERMISSAO
         #

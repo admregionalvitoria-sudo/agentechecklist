@@ -1,6 +1,6 @@
 ; Inno Setup Script - Instalador Único do Agente de Checklist SENAI
 #define MyAppName "Agente de Checklist SENAI"
-#define MyAppVersion "2.4.1"
+#define MyAppVersion "2.4.6"
 #define MyAppPublisher "SENAI - Serviço Nacional de Aprendizagem Industrial"
 #define MyAppExeName "ChecklistLogin.exe"
 
@@ -37,21 +37,15 @@ Name: "portuguese"; MessagesFile: "compiler:Languages\Portuguese.isl"
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\ChecklistLogin.exe"
 Type: filesandordirs; Name: "{app}\logo"
+Type: files; Name: "{commonstartup}\{#MyAppName}.lnk"
+Type: files; Name: "{commonstartup}\ChecklistLogin.lnk"
 
 [Files]
 Source: "{#SourcePath}\..\bin\ChecklistLogin.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourcePath}\..\logo\logo.png"; DestDir: "{app}\logo"; Flags: ignoreversion
 
-[Registry]
-; Garantia 1: Inicialização em HKLM Run (Inicia para TODOS os usuários no Logon)
-Root: HKLM; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ChecklistLogin"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue
-
-[Icons]
-; Garantia 2: Atalho na pasta de Inicialização Comum para Todos os Usuários
-Name: "{commonstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-
 [Run]
-; Garantia 3: Registra a tarefa agendada, concede permissões de pasta e habilita auto-update em futuras execuções
+; Registra a tarefa agendada única para logon e desbloqueio, concede permissões de pasta e habilita auto-update
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--install ""{code:GetLogFolderPath}"" ""{code:GetSelectedLocation}"""; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Flags: nowait postinstall skipifsilent; Description: "Iniciar Agente de Checklist SENAI agora"
 

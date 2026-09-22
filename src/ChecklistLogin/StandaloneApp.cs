@@ -237,7 +237,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.4.5";
+        public const string CurrentVersion = "2.4.6";
 
         // URL raw do arquivo version.txt no repositório GitHub (fallback)
         private const string VersionUrl =
@@ -571,21 +571,22 @@ namespace ChecklistLogin
                     Debug.WriteLine("AppDir ACL error: " + ex.Message);
                 }
 
-                // 2. Set HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run for All Users
                 string exePath = Process.GetCurrentProcess().MainModule.FileName;
+
+                // 2. Cleanup legacy HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run entry to prevent duplicate startup
                 try
                 {
                     using (var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true))
                     {
-                        if (key != null)
+                        if (key != null && key.GetValue("ChecklistLogin") != null)
                         {
-                            key.SetValue("ChecklistLogin", "\"" + exePath + "\"");
+                            key.DeleteValue("ChecklistLogin", false);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine("Registry error: " + ex.Message);
+                    Debug.WriteLine("Registry cleanup error: " + ex.Message);
                 }
 
                 // 3. Generate XML Task Definition for ALL USERS, USER SWITCHING, and HIGH PRIORITY
@@ -811,6 +812,8 @@ namespace ChecklistLogin
         private DateTime _lastAppearanceRefreshUtc = DateTime.MinValue;
         private void ApplyAppearance() { ApplyModernAppearance(); }
         private AppConfig _config;
+        private static DateTime _lastSubmissionTimeUtc = DateTime.MinValue;
+        private DateTime _lastReopenTimeUtc = DateTime.MinValue;
 
         // Atualiza a aparência remotamente com taxa reduzida para tempo real.
         private void RefreshAppearanceIfDue(string location)
@@ -903,6 +906,28 @@ namespace ChecklistLogin
 
         public void ReopenChecklist()
         {
+            // Se o usuário já enviou o checklist recentemente (nos últimos 30s), ignora reaberturas automáticas concorrentes
+            if ((DateTime.UtcNow - _lastSubmissionTimeUtc).TotalSeconds < 30)
+            {
+                return;
+            }
+
+            // Se a janela já está visível e focada, apenas traz para o topo sem resetar as respostas em andamento
+            if (IsVisible && WindowState != WindowState.Minimized)
+            {
+                WindowState = WindowState.Maximized;
+                Activate();
+                Topmost = true;
+                return;
+            }
+
+            // Debounce: ignora eventos de reabertura em rajada (ex: logon + IPC + SessionSwitch) em menos de 3s
+            if ((DateTime.UtcNow - _lastReopenTimeUtc).TotalSeconds < 3)
+            {
+                return;
+            }
+            _lastReopenTimeUtc = DateTime.UtcNow;
+
             _isExplicitShutdown = false;
             ResetForm();
             RefreshAppearanceIfDue(_config.Location ?? "PORTO");
@@ -1127,6 +1152,7 @@ namespace ChecklistLogin
 
         private void BtnSubmit_Click(object sender, RoutedEventArgs e)
         {
+            _lastSubmissionTimeUtc = DateTime.UtcNow;
             SaveLog();
             _isExplicitShutdown = true;
             Hide();
