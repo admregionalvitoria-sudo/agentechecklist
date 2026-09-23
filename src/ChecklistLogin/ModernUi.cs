@@ -206,9 +206,13 @@ namespace ChecklistLogin
             var heading = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 20, 0) };
             _customSubtitle = Label("", 9, "#164194", true); _customTitle = Label("", 23, "#142842", true); _customTitle.Margin = new Thickness(0, 5, 0, 0);
             heading.Children.Add(_customSubtitle); heading.Children.Add(_customTitle); Grid.SetColumn(heading, 1); header.Children.Add(heading);
-            var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center, MaxWidth = 190 };
+            var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center, MaxWidth = 210 };
             identity.Children.Add(Label(_config.Location ?? "PORTO", 11, "#164194", true));
-            identity.Children.Add(Label(Environment.UserName + " · " + Environment.MachineName, 10, "#718198", false)); Grid.SetColumn(identity, 2); header.Children.Add(identity);
+            identity.Children.Add(Label(Environment.UserName + " · " + Environment.MachineName, 10, "#718198", false));
+            var verBadge = new Border { Background = Brush("#EEF2FA"), BorderBrush = Brush("#C7D3E8"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(6, 2, 6, 2), Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+            verBadge.Child = new TextBlock { Text = "v" + AutoUpdater.CurrentVersion, FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = Brush("#5A729A") };
+            identity.Children.Add(verBadge);
+            Grid.SetColumn(identity, 2); header.Children.Add(identity);
             root.Children.Add(new Border { Child = header, Background = Brushes.White, BorderBrush = Brush("#E1E7EF"), BorderThickness = new Thickness(0, 0, 0, 1) });
 
             var body = new Grid { Margin = new Thickness(30, 22, 30, 22) };
