@@ -237,7 +237,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.4.7";
+        public const string CurrentVersion = "2.4.8";
 
         // URL raw do arquivo version.txt no repositório GitHub (fallback)
         private const string VersionUrl =
@@ -298,6 +298,7 @@ namespace ChecklistLogin
                     remoteVersion = remoteVersion.Trim().TrimStart('v', 'V');
                     exeUrl = ExeUrl;
                     expectedHash = FetchText(ExeUrl + ".sha256");
+                    forceRestart = true; // Reiniciar automaticamente após update do GitHub
                 }
 
                 remoteVersion = remoteVersion.Trim().TrimStart('v', 'V');
