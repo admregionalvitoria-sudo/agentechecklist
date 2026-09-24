@@ -267,7 +267,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.4.9";
+        public const string CurrentVersion = "2.4.10";
 
         // URL raw do arquivo version.txt no repositório GitHub (fallback)
         private const string VersionUrl =
@@ -872,7 +872,7 @@ namespace ChecklistLogin
 
             _appearanceTimer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromSeconds(5)
+                Interval = TimeSpan.FromSeconds(60)
             };
             _appearanceTimer.Tick += delegate
             {
