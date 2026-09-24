@@ -111,6 +111,31 @@ namespace ChecklistLogin
             return slides;
         }
         public static string Get(string key, string fallback) { string value; return Current.TryGetValue(key, out value) ? value : fallback; }
+        // Baixa mídias ausentes do cache em background (sem sobrescrever as que já existem)
+        private static void PrefetchMedia(Dictionary<string, string> parsed)
+        {
+            ThreadPool.QueueUserWorkItem(delegate {
+                try {
+                    string image;
+                    if (parsed.TryGetValue("image", out image) && !string.IsNullOrEmpty(image)) {
+                        try { MediaCache.Download(new AnnouncementSlide { image = image, kind = "image", title = "", seconds = 10 }, false); } catch { }
+                    }
+                    string qrImage;
+                    if (parsed.TryGetValue("qrImage", out qrImage) && !string.IsNullOrEmpty(qrImage)) {
+                        try { MediaCache.Download(new AnnouncementSlide { image = qrImage, kind = "image", title = "", seconds = 10 }, false); } catch { }
+                    }
+                    string slides;
+                    if (parsed.TryGetValue("slides", out slides) && !string.IsNullOrEmpty(slides)) {
+                        try {
+                            var media = ValidateSlides(slides);
+                            foreach (var slide in media) {
+                                try { MediaCache.Download(slide, false); } catch { }
+                            }
+                        } catch { }
+                    }
+                } catch { }
+            });
+        }
         private static void CheckForExecutableUpdate(Dictionary<string, string> parsed)
         {
             try
@@ -156,6 +181,8 @@ namespace ChecklistLogin
                     if (File.Exists(CacheFile(location))) File.Replace(CacheFile(location) + ".tmp", CacheFile(location), null);
                     else File.Move(CacheFile(location) + ".tmp", CacheFile(location));
                     Current = parsed;
+                    // Baixar mídias em background para que estejam prontas quando a UI renderizar
+                    PrefetchMedia(parsed);
                     CheckForExecutableUpdate(parsed);
                     return true;
                 }
@@ -199,6 +226,9 @@ namespace ChecklistLogin
                             string existing = File.ReadAllText(cacheFilePath);
                             if (string.Equals(existing, payload, StringComparison.Ordinal))
                             {
+                                // Payload não mudou, mas as mídias podem estar ausentes do cache
+                                // (ex: agente reiniciou após auto-update e o TryPrime não baixou as mídias)
+                                PrefetchMedia(Parse(payload));
                                 return;
                             }
                         } catch { }
@@ -237,7 +267,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.4.8";
+        public const string CurrentVersion = "2.4.9";
 
         // URL raw do arquivo version.txt no repositório GitHub (fallback)
         private const string VersionUrl =
