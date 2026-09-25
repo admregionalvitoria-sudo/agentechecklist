@@ -349,7 +349,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.4.12";
+        public const string CurrentVersion = "2.4.13";
 
         // URL raw do arquivo version.txt no repositório GitHub (fallback)
         private const string VersionUrl =
@@ -921,17 +921,17 @@ namespace ChecklistLogin
         private TextBlock _customTitle, _customSubtitle, _customNotice;
         private Image _customImage;
         private Border _customPanel;
-        private DispatcherTimer _appearanceTimer;
         private DateTime _lastAppearanceRefreshUtc = DateTime.MinValue;
         private void ApplyAppearance() { ApplyModernAppearance(); }
         private AppConfig _config;
         private static DateTime _lastSubmissionTimeUtc = DateTime.MinValue;
         private DateTime _lastReopenTimeUtc = DateTime.MinValue;
 
-        // Atualiza a aparência remotamente com taxa reduzida para tempo real.
+        // Busca a aparência do CDN somente quando necessário (logon/unlock).
+        // Cooldown de 30 min evita requests duplicados em eventos rápidos seguidos.
         private void RefreshAppearanceIfDue(string location)
         {
-            if ((DateTime.UtcNow - _lastAppearanceRefreshUtc).TotalSeconds < 3) return;
+            if ((DateTime.UtcNow - _lastAppearanceRefreshUtc).TotalMinutes < 30) return;
             _lastAppearanceRefreshUtc = DateTime.UtcNow;
             RemoteAppearance.Refresh(location, ApplyAppearance);
         }
@@ -952,33 +952,9 @@ namespace ChecklistLogin
             if (previewOnly) return;
             RemoteAppearance.Refresh(location, ApplyAppearance);
 
-            _appearanceTimer = new DispatcherTimer
-            {
-                // 600s (10 min): leitura direta do CDN Cloudinary, sem custo no Vercel.
-                // O CDN invalida em ≤60s após publicação no painel (invalidate=true).
-                // Com 10 agentes, isso gera ~6 requests CDN/hora por scope — praticamente zero.
-                Interval = TimeSpan.FromSeconds(600)
-            };
-            _appearanceTimer.Tick += delegate
-            {
-                RefreshAppearanceIfDue(location);
-            };
-            _appearanceTimer.Start();
-
-            // Ao ganhar foco (reabertura/sessão), busca imediatamente a aparência.
-            Activated += delegate
-            {
-                if (_isExplicitShutdown) return;
-                RefreshAppearanceIfDue(location);
-            };
-
-            Closed += delegate
-            {
-                if (_appearanceTimer != null)
-                {
-                    _appearanceTimer.Stop();
-                }
-            };
+            // Sem timer periódico: a config é buscada somente no startup (boot/logon)
+            // e no desbloqueio de sessão via ReopenChecklist → RefreshAppearanceIfDue.
+            // Com 300 máquinas isso gera ~0 carga no CDN / Vercel.
 
             // Escutar eventos de troca de sessão/logon do Windows
             try
