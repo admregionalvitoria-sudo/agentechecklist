@@ -32,23 +32,84 @@ namespace ChecklistLogin
     public static class RemoteAppearance
     {
         private static readonly string CacheFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChecklistLogin");
-        private const string Endpoint = "https://log-acesso.vercel.app/api/appearance?scope=";
         private static int _refreshing;
         public static Dictionary<string, string> Current = new Dictionary<string, string>();
         private static string _panelUrl = "https://log-acesso.vercel.app/api/appearance";
+        // Hash em memória para detectar mudança e evitar reprocessar config idêntica
+        private static string _lastPayloadHash = null;
         public static void SetConfig(string panelUrl) { if (!string.IsNullOrWhiteSpace(panelUrl)) _panelUrl = panelUrl; }
         private static string CacheFile(string location) { return Path.Combine(CacheFolder, "appearance-" + Regex.Replace(location, "[^A-Za-z0-9]", "_") + ".json"); }
+
+        // ── Cloudinary CDN (leitura gratuita, zero Function Invocations no Vercel) ───
+        // IMPORTANTE: Sem timestamp na URL — deixa o CDN servir do cache.
+        // O painel publica com invalidate=true, então o CDN invalida em ≤60s.
+        private static string CloudinaryCdnUrl(string scope)
+        {
+            string key = Regex.Replace(scope, " ", "_");
+            return "https://res.cloudinary.com/j35zooeo/raw/upload/checklist/config/" + key + ".json";
+        }
+
+        private static bool TryFetchCloudinary(string scope, out string payloadJson)
+        {
+            payloadJson = null;
+            try
+            {
+                var req = (HttpWebRequest)WebRequest.Create(CloudinaryCdnUrl(scope));
+                req.Timeout = 10000;
+                req.ReadWriteTimeout = 10000;
+                // Não envia no-cache: deixa o CDN Cloudinary servir do cache de borda.
+                // O painel usa invalidate=true ao publicar, garantindo que o CDN invalida automaticamente.
+                req.UserAgent = "ChecklistAgent/" + AutoUpdater.CurrentVersion;
+                string raw;
+                using (var resp = (HttpWebResponse)req.GetResponse())
+                using (var reader = new StreamReader(resp.GetResponseStream()))
+                {
+                    char[] buffer = new char[1200001]; int total = 0, count;
+                    while (total < buffer.Length && (count = reader.Read(buffer, total, buffer.Length - total)) > 0) total += count;
+                    if (total > 1200000) return false;
+                    raw = new string(buffer, 0, total);
+                }
+                // O arquivo gravado no Cloudinary já é o payload serializado (string JSON pura)
+                // Valida que tem campos mínimos esperados
+                if (!string.IsNullOrWhiteSpace(raw) && raw.TrimStart().StartsWith("{") && raw.Contains("\"title\""))
+                {
+                    payloadJson = raw;
+                    return true;
+                }
+            }
+            catch (WebException ex)
+            {
+                var httpResp = ex.Response as HttpWebResponse;
+                // 404 = config ainda não publicada para este scope — silencioso
+                if (httpResp == null || httpResp.StatusCode != HttpStatusCode.NotFound)
+                    Debug.WriteLine("Cloudinary CDN: " + ex.Message);
+            }
+            catch (Exception ex) { Debug.WriteLine("Cloudinary CDN: " + ex.Message); }
+            return false;
+        }
+
+        // ── Busca aparência: tenta CDN Cloudinary (principal), Vercel como fallback de emergência ───
+        // Nota: O Vercel só é chamado aqui no TryPrime (startup). O Refresh periódico usa apenas CDN.
         private static bool TryFetchAppearance(string scope, out string response)
         {
             response = null;
 
+            // 1ª tentativa: CDN Cloudinary — gratuito, sem passar pelo Vercel
+            string cloudPayload;
+            if (TryFetchCloudinary(scope, out cloudPayload))
+            {
+                // Envolve no formato { "payload": "..." } esperado pelo restante do código
+                response = "{\"payload\":" + new JavaScriptSerializer().Serialize(cloudPayload) + "}";
+                return true;
+            }
+
+            // 2ª tentativa: API Vercel (fallback de emergência — só no startup, se CDN falhar)
             try
             {
-                var request = (HttpWebRequest)WebRequest.Create(_panelUrl + "?scope=" + Uri.EscapeDataString(scope) + "&_t=" + DateTime.UtcNow.Ticks);
-                request.Timeout = 10000;
-                request.ReadWriteTimeout = 10000;
-                request.Headers[HttpRequestHeader.CacheControl] = "no-cache";
-                request.Headers[HttpRequestHeader.Pragma] = "no-cache";
+                var request = (HttpWebRequest)WebRequest.Create(_panelUrl + "?scope=" + Uri.EscapeDataString(scope));
+                request.Timeout = 12000;
+                request.ReadWriteTimeout = 12000;
+                request.UserAgent = "ChecklistAgent/" + AutoUpdater.CurrentVersion;
 
                 using (var result = request.GetResponse())
                 using (var reader = new StreamReader(result.GetResponseStream()))
@@ -198,40 +259,61 @@ namespace ChecklistLogin
         {
             try { Current = Parse(File.ReadAllText(CacheFile(location))); } catch { Current = new Dictionary<string, string>(); }
         }
+        // Calcula hash SHA256 de uma string (para detectar mudança de payload)
+        private static string Sha256Of(string text)
+        {
+            using (var sha = SHA256.Create())
+            {
+                byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
+                return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
         public static void Refresh(string location, Action done)
         {
             if (Interlocked.Exchange(ref _refreshing, 1) != 0) return;
             ThreadPool.QueueUserWorkItem(delegate {
                 try {
                     ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
-                    string response = null;
+
+                    // Refresh periódico: usa SOMENTE o CDN Cloudinary.
+                    // O Vercel nunca é chamado aqui — economiza Function Invocations do plano gratuito.
+                    string payload = null;
                     foreach (string scope in new string[] { location, "global" }) {
-                        if (TryFetchAppearance(scope, out response)) {
+                        string cloudPayload;
+                        if (TryFetchCloudinary(scope, out cloudPayload)) {
+                            payload = cloudPayload;
                             break;
                         }
                     }
-                    if (response == null) return;
-                    string payload = response;
-                    try {
-                        var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(response);
-                        object wrappedPayload;
-                        if (root != null && root.TryGetValue("payload", out wrappedPayload) && wrappedPayload is string) {
-                            payload = (string)wrappedPayload;
-                        }
-                    } catch { }
+                    if (payload == null) return;
+
+                    // Compara hash em memória: se o payload não mudou, evita reprocessamento
+                    string newHash = Sha256Of(payload);
+                    if (newHash == _lastPayloadHash)
+                    {
+                        // Config idêntica: só garante que as mídias estão em cache local
+                        PrefetchMedia(Parse(payload));
+                        return;
+                    }
+
+                    // Config mudou — verifica também contra o arquivo em disco
                     string cacheFilePath = CacheFile(location);
+                    bool diskUnchanged = false;
                     if (File.Exists(cacheFilePath))
                     {
                         try {
                             string existing = File.ReadAllText(cacheFilePath);
-                            if (string.Equals(existing, payload, StringComparison.Ordinal))
-                            {
-                                // Payload não mudou, mas as mídias podem estar ausentes do cache
-                                // (ex: agente reiniciou após auto-update e o TryPrime não baixou as mídias)
-                                PrefetchMedia(Parse(payload));
-                                return;
-                            }
+                            diskUnchanged = string.Equals(existing, payload, StringComparison.Ordinal);
                         } catch { }
+                    }
+
+                    _lastPayloadHash = newHash;
+
+                    if (diskUnchanged)
+                    {
+                        PrefetchMedia(Parse(payload));
+                        return;
                     }
 
                     var parsed = Parse(payload);
@@ -267,7 +349,7 @@ namespace ChecklistLogin
     public static class AutoUpdater
     {
         // Versão atual do executável — deve coincidir com o conteúdo de version.txt no repo
-        public const string CurrentVersion = "2.4.10";
+        public const string CurrentVersion = "2.4.12";
 
         // URL raw do arquivo version.txt no repositório GitHub (fallback)
         private const string VersionUrl =
@@ -872,11 +954,13 @@ namespace ChecklistLogin
 
             _appearanceTimer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromSeconds(60)
+                // 600s (10 min): leitura direta do CDN Cloudinary, sem custo no Vercel.
+                // O CDN invalida em ≤60s após publicação no painel (invalidate=true).
+                // Com 10 agentes, isso gera ~6 requests CDN/hora por scope — praticamente zero.
+                Interval = TimeSpan.FromSeconds(600)
             };
             _appearanceTimer.Tick += delegate
             {
-                // Mantém o cache sempre atualizado em tempo real (a cada 5s)
                 RefreshAppearanceIfDue(location);
             };
             _appearanceTimer.Start();
